@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
-from django_environ import Env
+from environ import Env 
+
 
 # Build paths inside the project
 BASE_DIR = Path(__file__).resolve().parent.parent
