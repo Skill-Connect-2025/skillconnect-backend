@@ -12,7 +12,8 @@ from .permissions import RoleBasedPermission
 User = get_user_model()
 
 class RegisterView(APIView):
-    permission_classes = []  # Public endpoint
+    permission_classes = [RoleBasedPermission]
+    is_public = True
 
     @swagger_auto_schema(
         request_body=UserRegistrationSerializer,
@@ -33,8 +34,8 @@ class RegisterView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class LoginView(APIView):
-    permission_classes = []  # Public endpoint
-
+    permission_classes = [RoleBasedPermission]
+    is_public = True
     @swagger_auto_schema(
         request_body=LoginSerializer,
         responses={
@@ -53,14 +54,12 @@ class LoginView(APIView):
         if serializer.is_valid():
             identifier = serializer.validated_data['identifier']
             password = serializer.validated_data['password']
-
             user = User.get_by_identifier(identifier)
             if not user:
                 return Response(
                     {'error': 'Invalid email or phone number'},
                     status=status.HTTP_401_UNAUTHORIZED
                 )
-
             user = authenticate(username=user.username, password=password)
             if user:
                 if user.is_superuser:
@@ -77,9 +76,8 @@ class LoginView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class ProfileView(APIView):
-    permission_classes = [permissions.IsAuthenticated, RoleBasedPermission]  # Add IsAuthenticated
-    required_role = None  # Accessible to both Clients and Workers
-
+    permission_classes = [permissions.IsAuthenticated, RoleBasedPermission]
+    required_role = None
     @swagger_auto_schema(
         responses={
             200: UserSerializer,
@@ -91,9 +89,8 @@ class ProfileView(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 class ProfileUpdateView(APIView):
-    permission_classes = [permissions.IsAuthenticated, RoleBasedPermission]  # Add IsAuthenticated
-    required_role = None  # Accessible to both Clients and Workers
-
+    permission_classes = [permissions.IsAuthenticated, RoleBasedPermission]
+    required_role = None
     @swagger_auto_schema(
         request_body=ProfileUpdateSerializer,
         responses={
@@ -110,11 +107,10 @@ class ProfileUpdateView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class CompleteProfileView(APIView):
-    permission_classes = [permissions.IsAuthenticated, RoleBasedPermission] 
-    required_role = None 
-
+    permission_classes = [permissions.IsAuthenticated, RoleBasedPermission]
+    required_role = None
     @swagger_auto_schema(
-        request_body=CompleteProfileSerializer,
+        request_body=CompleteProfileSerializer,  
         responses={
             200: CompleteProfileSerializer,
             400: 'Bad Request',
@@ -122,8 +118,8 @@ class CompleteProfileView(APIView):
         }
     )
     def put(self, request):
-        serializer = CompleteProfileSerializer(request.user, data=request.data, partial=True)
+        serializer = CompleteProfileSerializer(request.user, data=request.data, partial=False)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)  
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

@@ -1,7 +1,6 @@
 import os
 from pathlib import Path
-from environ import Env 
-
+from environ import Env
 
 # Build paths inside the project
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -10,18 +9,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 env = Env()
 Env.read_env(os.path.join(BASE_DIR, '.env'))
 
-
 SECRET_KEY = env('SECRET_KEY', default='django-insecure-$nym9i&u#%n=zi#7uz+5r28o62gek*x$#ox2njxf2))wtfo8n7')
-
-
 DEBUG = env.bool('DEBUG', default=True)
-
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'api-skillconnect.wisewaytech.com']
 
-# Application definition
 INSTALLED_APPS = [
     'django.contrib.admin',
-    'django.contrib.sites', 
+    'django.contrib.sites',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
@@ -68,7 +62,6 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'skillconnect.wsgi.application'
 
-# Database
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
@@ -83,7 +76,6 @@ DATABASES = {
     }
 }
 
-# Password validation
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
     {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator'},
@@ -91,7 +83,6 @@ AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
 
-# Internationalization
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'UTC'
 USE_I18N = True
@@ -99,15 +90,15 @@ USE_TZ = True
 
 AUTH_USER_MODEL = 'users.User'
 
-# Static files (CSS, JavaScript, Images)
 STATIC_URL = 'static/'
+MEDIA_URL = '/media/'  # Added
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media') 
 
-# Default primary key field type
-DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+DEFAULT_AUTO_FIELD = 'django.db.models.CollateField'
 
-# REST Framework settings
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication', 
         'rest_framework.authentication.SessionAuthentication',
         'rest_framework.authentication.BasicAuthentication',
     ],

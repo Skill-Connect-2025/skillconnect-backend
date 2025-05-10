@@ -9,10 +9,10 @@ class UserAdmin(admin.ModelAdmin):
 
 @admin.register(Client)
 class ClientAdmin(admin.ModelAdmin):
-    list_display = ('user',)
+    list_display = ('user', 'location', 'profile_pic')
     search_fields = ('user__username', 'user__email')
 
 @admin.register(Worker)
 class WorkerAdmin(admin.ModelAdmin):
-    list_display = ('user', 'location')
+    list_display = ('user', 'location', 'profile_pic')
     search_fields = ('user__username', 'user__email')
