@@ -70,11 +70,11 @@ class LoginSerializer(serializers.Serializer):
     identifier = serializers.CharField()
     password = serializers.CharField(write_only=True)
 
-class CompleteProfileSerializer(serializers.ModelSerializer):
+class CompleteProfileSerializer(serializers.Serializer):
     first_name = serializers.CharField(required=True)
     last_name = serializers.CharField(required=True)
     profile_pic = serializers.ImageField(required=False)
-    location = serializers.CharField(max_length=100, required=True)  # Now required for both
+    location = serializers.CharField(max_length=100, required=True)  
 
     class Meta:
         model = User
@@ -89,7 +89,7 @@ class CompleteProfileSerializer(serializers.ModelSerializer):
             client = instance.client
             if 'profile_pic' in validated_data:
                 client.profile_pic = validated_data['profile_pic']
-            client.location = validated_data['location']  # Save location for Clients
+            client.location = validated_data['location']  
             client.save()
 
         if instance.is_worker:
