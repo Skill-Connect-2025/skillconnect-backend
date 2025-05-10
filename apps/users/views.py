@@ -6,7 +6,7 @@ from django.contrib.auth import authenticate
 from django.contrib.auth import get_user_model
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
-from .serializers import UserSerializer, LoginSerializer, ProfileUpdateSerializer, UserRegistrationSerializer
+from .serializers import UserSerializer, LoginSerializer, ProfileUpdateSerializer, UserRegistrationSerializer, CompleteProfileSerializer
 from .permissions import RoleBasedPermission
 
 User = get_user_model()
@@ -108,3 +108,22 @@ class ProfileUpdateView(APIView):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class CompleteProfileView(APIView):
+    permission_classes = [permissions.IsAuthenticated, RoleBasedPermission] 
+    required_role = None 
+
+    @swagger_auto_schema(
+        request_body=CompleteProfileSerializer,
+        responses={
+            200: CompleteProfileSerializer,
+            400: 'Bad Request',
+            401: 'Unauthorized'
+        }
+    )
+    def put(self, request):
+        serializer = ProfileUpdateSerializer(request.user, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)  
