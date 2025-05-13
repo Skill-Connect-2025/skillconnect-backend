@@ -4,7 +4,7 @@ from .models import Client, Worker, VerificationToken
 import random
 from django.core.mail import send_mail
 from django.conf import settings
-from twilio.rest import Client
+from twilio.rest import Client as TwilioClient
 from django.utils import timezone
 from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
@@ -16,17 +16,16 @@ class SelectSignupMethodSerializer(serializers.Serializer):
 
     def save(self):
         signup_method = self.validated_data['signup_method']
-        # Create a temporary user with just the signup method
         user = User.objects.create(
             username=f"temp_{random.randint(100000, 999999)}",
             is_active=False,
-            signup_method=signup_method  
+            signup_method=signup_method
         )
         return user
 
 class SignupRequestSerializer(serializers.Serializer):
     identifier = serializers.CharField()
-    user_id = serializers.IntegerField() 
+    user_id = serializers.IntegerField()
 
     def validate(self, data):
         user = User.objects.filter(id=data['user_id'], is_active=False).first()
@@ -53,14 +52,12 @@ class SignupRequestSerializer(serializers.Serializer):
         signup_method = self.validated_data['signup_method']
         code = str(random.randint(100000, 999999))
 
-        # Update user with identifier
         if signup_method == 'email':
             user.email = identifier
         else:
             user.phone_number = identifier
         user.save()
 
-        # Create verification token
         VerificationToken.objects.create(user=user, code=code, purpose='registration')
 
         if signup_method == 'email':
@@ -74,7 +71,7 @@ class SignupRequestSerializer(serializers.Serializer):
                 fail_silently=False,
             )
         else:
-            twilio_client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            twilio_client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)  # Fixed
             message = f"Your SkillConnect verification code is: {code}"
             twilio_client.messages.create(
                 body=message,
@@ -126,7 +123,7 @@ class VerifyAndCompleteSerializer(serializers.Serializer):
             user.save()
             VerificationToken.objects.filter(user=user, code=self.validated_data['code']).update(is_used=True)
             if self.validated_data['role'] == 'client':
-                Client.objects.create(user=user)
+                Client.objects.create(user=user)  # This should now work
             else:
                 Worker.objects.create(user=user)
         return user
@@ -180,7 +177,7 @@ class PasswordResetRequestSerializer(serializers.Serializer):
                 fail_silently=False,
             )
         elif user.phone_number:
-            twilio_client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            twilio_client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)  # Fixed
             message = f"Your SkillConnect password reset code is: {code}"
             twilio_client.messages.create(
                 body=message,

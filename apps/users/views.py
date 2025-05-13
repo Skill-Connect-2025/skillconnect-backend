@@ -12,7 +12,7 @@ from .serializers import (
 from .permissions import RoleBasedPermission
 from .models import VerificationToken
 from django.utils import timezone
-from twilio.rest import Client
+from twilio.rest import Client as TwilioClient 
 from django.conf import settings
 import random
 
@@ -88,7 +88,7 @@ class GetCodeAgainView(APIView):
                     fail_silently=False,
                 )
             else:
-                twilio_client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+                twilio_client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)  # Fixed
                 message = f"Your new SkillConnect verification code is: {code}"
                 twilio_client.messages.create(
                     body=message,
@@ -119,7 +119,6 @@ class VerifyAndCompleteView(APIView):
                 status=status.HTTP_201_CREATED
             )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
 
 class LoginView(APIView):
     permission_classes = []
