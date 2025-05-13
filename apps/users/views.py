@@ -5,7 +5,7 @@ from rest_framework.authtoken.models import Token
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 from .serializers import (
-    SignupRequestSerializer, VerifyAndProceedSerializer, CompleteRegistrationSerializer,
+    SelectSignupMethodSerializer, SignupRequestSerializer, VerifyAndCompleteSerializer,
     LoginSerializer, PasswordResetRequestSerializer, PasswordResetConfirmSerializer,
     ClientProfileSerializer, UserSerializer
 )
@@ -16,8 +16,31 @@ from twilio.rest import Client
 from django.conf import settings
 import random
 
+class SelectSignupMethodView(APIView):
+    permission_classes = []
+
+    @swagger_auto_schema(
+        request_body=SelectSignupMethodSerializer,
+        responses={
+            200: openapi.Response('Signup method selected', openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                properties={
+                    'user_id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                    'message': openapi.Schema(type=openapi.TYPE_STRING)
+                }
+            )),
+            400: 'Bad Request'
+        }
+    )
+    def post(self, request):
+        serializer = SelectSignupMethodSerializer(data=request.data)
+        if serializer.is_valid():
+            user = serializer.save()
+            return Response({"user_id": user.id, "message": "Signup method selected"}, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 class SignupRequestView(APIView):
-    permission_classes = []  # Public endpoint
+    permission_classes = []
 
     @swagger_auto_schema(
         request_body=SignupRequestSerializer,
@@ -33,25 +56,8 @@ class SignupRequestView(APIView):
             return Response({"message": "Verification code sent"}, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-class VerifyAndProceedView(APIView):
-    permission_classes = []  # Public endpoint
-
-    @swagger_auto_schema(
-        request_body=VerifyAndProceedSerializer,
-        responses={
-            200: openapi.Response('Verification successful'),
-            400: 'Bad Request'
-        }
-    )
-    def post(self, request):
-        serializer = VerifyAndProceedSerializer(data=request.data)
-        if serializer.is_valid():
-            user = serializer.save()
-            return Response({"message": "Verification successful", "identifier": user.email or user.phone_number}, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 class GetCodeAgainView(APIView):
-    permission_classes = []  # Public endpoint
+    permission_classes = []
 
     @swagger_auto_schema(
         request_body=SignupRequestSerializer,
@@ -64,15 +70,14 @@ class GetCodeAgainView(APIView):
         serializer = SignupRequestSerializer(data=request.data)
         if serializer.is_valid():
             identifier = serializer.validated_data['identifier']
-            signup_method = serializer.validated_data['signup_method']
-            user = User.objects.filter(email=identifier).first() if signup_method == 'email' else User.objects.filter(phone_number=identifier).first()
+            user = User.objects.filter(id=serializer.validated_data['user_id']).first()
             if not user or user.is_verified:
                 return Response({"error": "User not found or already verified"}, status=status.HTTP_400_BAD_REQUEST)
             
             code = str(random.randint(100000, 999999))
             VerificationToken.objects.create(user=user, code=code, purpose='registration')
 
-            if signup_method == 'email':
+            if user.signup_method == 'email':
                 subject = "SkillConnect Verification Code"
                 message = f"Your new verification code is: {code}\nThis code expires in 10 minutes."
                 send_mail(
@@ -94,18 +99,18 @@ class GetCodeAgainView(APIView):
             return Response({"message": "Verification code resent"}, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-class CompleteRegistrationView(APIView):
-    permission_classes = []  # Public endpoint
+class VerifyAndCompleteView(APIView):
+    permission_classes = []
 
     @swagger_auto_schema(
-        request_body=CompleteRegistrationSerializer,
+        request_body=VerifyAndCompleteSerializer,
         responses={
             201: openapi.Response('Registration completed', UserSerializer),
             400: 'Bad Request'
         }
     )
     def post(self, request):
-        serializer = CompleteRegistrationSerializer(data=request.data)
+        serializer = VerifyAndCompleteSerializer(data=request.data)
         if serializer.is_valid():
             user = serializer.save()
             token, created = Token.objects.get_or_create(user=user)
@@ -114,9 +119,10 @@ class CompleteRegistrationView(APIView):
                 status=status.HTTP_201_CREATED
             )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
 
 class LoginView(APIView):
-    permission_classes = []  # Public endpoint
+    permission_classes = []
 
     @swagger_auto_schema(
         request_body=LoginSerializer,
@@ -137,7 +143,7 @@ class LoginView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class PasswordResetRequestView(APIView):
-    permission_classes = []  # Public endpoint
+    permission_classes = []
 
     @swagger_auto_schema(
         request_body=PasswordResetRequestSerializer,
@@ -154,7 +160,7 @@ class PasswordResetRequestView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class PasswordResetConfirmView(APIView):
-    permission_classes = []  # Public endpoint
+    permission_classes = []
 
     @swagger_auto_schema(
         request_body=PasswordResetConfirmSerializer,

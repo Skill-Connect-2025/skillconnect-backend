@@ -6,6 +6,7 @@ class User(AbstractUser):
     email = models.EmailField(blank=True, null=True, unique=True)
     phone_number = models.CharField(max_length=15, blank=True, null=True, unique=True)
     is_verified = models.BooleanField(default=False)
+    signup_method = models.CharField(max_length=10, choices=[('email', 'Email'), ('phone', 'Phone')], blank=True, null=True)  # New field
 
     @property
     def is_client(self):
