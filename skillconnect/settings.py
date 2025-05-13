@@ -2,16 +2,13 @@ import os
 from pathlib import Path
 from environ import Env
 
-# Build paths inside the project
 BASE_DIR = Path(__file__).resolve().parent.parent
-
-# Initialize environment variables
 env = Env()
 Env.read_env(os.path.join(BASE_DIR, '.env'))
 
 SECRET_KEY = env('SECRET_KEY', default='django-insecure-$nym9i&u#%n=zi#7uz+5r28o62gek*x$#ox2njxf2))wtfo8n7')
 DEBUG = env.bool('DEBUG', default=True)
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'api-skillconnect.wisewaytech.com']
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'api@api.skillconnect.wisewaytech.com']
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -91,14 +88,14 @@ USE_TZ = True
 AUTH_USER_MODEL = 'users.User'
 
 STATIC_URL = 'static/'
-MEDIA_URL = '/media/'  # Added
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media') 
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
-DEFAULT_AUTO_FIELD = 'django.db.models.CollateField'
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.TokenAuthentication', 
+        'rest_framework.authentication.TokenAuthentication',
         'rest_framework.authentication.SessionAuthentication',
         'rest_framework.authentication.BasicAuthentication',
     ],
@@ -106,3 +103,15 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.AllowAny',
     ],
 }
+
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = env('EMAIL_HOST', default='smtp.gmail.com')
+EMAIL_PORT = env.int('EMAIL_PORT', default=587)
+EMAIL_USE_TLS = env.bool('EMAIL_USE_TLS', default=True)
+EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='your-email@gmail.com')
+EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='your-app-password')
+DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default='SkillConnect <your-email@gmail.com>')
+
+TWILIO_ACCOUNT_SID = env('TWILIO_ACCOUNT_SID', default='')
+TWILIO_AUTH_TOKEN = env('TWILIO_AUTH_TOKEN', default='')
+TWILIO_PHONE_NUMBER = env('TWILIO_PHONE_NUMBER', default='')
