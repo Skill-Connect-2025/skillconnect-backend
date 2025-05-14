@@ -1,26 +1,20 @@
 import os
 from pathlib import Path
-from environ import Env 
+from environ import Env
+import pymysql
+pymysql.install_as_MySQLdb()
 
-
-# Build paths inside the project
 BASE_DIR = Path(__file__).resolve().parent.parent
-
-# Initialize environment variables
 env = Env()
 Env.read_env(os.path.join(BASE_DIR, '.env'))
 
-
 SECRET_KEY = env('SECRET_KEY', default='django-insecure-$nym9i&u#%n=zi#7uz+5r28o62gek*x$#ox2njxf2))wtfo8n7')
-
-
 DEBUG = env.bool('DEBUG', default=True)
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'api@api.skillconnect.wisewaytech.com']
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'api-skillconnect.wisewaytech.com']
-
-# Application definition
 INSTALLED_APPS = [
     'django.contrib.admin',
+    'django.contrib.sites',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
@@ -67,7 +61,6 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'skillconnect.wsgi.application'
 
-# Database
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
@@ -82,7 +75,6 @@ DATABASES = {
     }
 }
 
-# Password validation
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
     {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator'},
@@ -90,7 +82,6 @@ AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
 
-# Internationalization
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'UTC'
 USE_I18N = True
@@ -98,15 +89,15 @@ USE_TZ = True
 
 AUTH_USER_MODEL = 'users.User'
 
-# Static files (CSS, JavaScript, Images)
 STATIC_URL = 'static/'
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
-# Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# REST Framework settings
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication',
         'rest_framework.authentication.SessionAuthentication',
         'rest_framework.authentication.BasicAuthentication',
     ],
@@ -114,3 +105,15 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.AllowAny',
     ],
 }
+
+TWILIO_ACCOUNT_SID = env('TWILIO_ACCOUNT_SID', default='')
+TWILIO_AUTH_TOKEN = env('TWILIO_AUTH_TOKEN', default='')
+TWILIO_PHONE_NUMBER = env('TWILIO_PHONE_NUMBER', default='')
+
+# Email configuration from .env
+EMAIL_HOST = env('EMAIL_HOST', default='smtp.gmail.com')
+EMAIL_PORT = env.int('EMAIL_PORT', default=587)
+EMAIL_USE_TLS = env.bool('EMAIL_USE_TLS', default=True)
+EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='')
+EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='')
+DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default='SkillConnect <lily.yishak2@gmail.com>')
