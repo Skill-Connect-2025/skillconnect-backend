@@ -12,7 +12,7 @@ class JobCreateView(APIView):
     permission_classes = [IsAuthenticated, IsClient]
 
     @swagger_auto_schema(
-        operation_description="Create a new job (client only).",
+        operation_description="Create a new job (client only). Photos are optional. Use multipart/form-data. Authenticate with 'Token <your_token>' in Authorization header.",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
             required=['title', 'location', 'skills', 'description', 'category_id', 'payment_method'],
@@ -28,12 +28,14 @@ class JobCreateView(APIView):
                     description='Payment method'
                 ),
                 'uploaded_images': openapi.Schema(
-                    type=openapi.TYPE_ARRAY,
-                    items=openapi.Items(type=openapi.TYPE_FILE),
-                    description='Optional image files'
+                    type=openapi.TYPE_FILE,
+                    description='Optional image files (multiple files allowed, can be omitted)',
+                    nullable=True
                 ),
             },
         ),
+        consumes=['multipart/form-data'],
+        produces=['application/json'],
         responses={
             201: JobSerializer,
             400: 'Bad Request',
@@ -81,7 +83,7 @@ class JobUpdateView(APIView):
     permission_classes = [IsAuthenticated, IsClient]
 
     @swagger_auto_schema(
-        operation_description="Update a job (client only, full or partial updates allowed).",
+        operation_description="Update a job (client only, full or partial updates allowed). Photos are optional. Use multipart/form-data.",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
             properties={
@@ -96,12 +98,14 @@ class JobUpdateView(APIView):
                     description='Payment method'
                 ),
                 'uploaded_images': openapi.Schema(
-                    type=openapi.TYPE_ARRAY,
-                    items=openapi.Items(type=openapi.TYPE_FILE),
-                    description='Optional image files (replaces existing images if provided)'
+                    type=openapi.TYPE_FILE,
+                    description='Optional image files (replaces existing images if provided, can be omitted)',
+                    nullable=True
                 ),
             },
         ),
+        consumes=['multipart/form-data'],
+        produces=['application/json'],
         responses={
             200: JobSerializer,
             400: 'Bad Request',

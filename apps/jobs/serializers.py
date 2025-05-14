@@ -19,7 +19,11 @@ class JobSerializer(serializers.ModelSerializer):
     )
     images = JobImageSerializer(many=True, read_only=True)
     uploaded_images = serializers.ListField(
-        child=serializers.ImageField(), write_only=True, required=False
+        child=serializers.ImageField(allow_empty_file=True), 
+        write_only=True, 
+        required=False, 
+        allow_null=True, 
+        default=[]
     )
     payment_method = serializers.ChoiceField(choices=PAYMENT_METHOD_CHOICES)
     status = serializers.ChoiceField(choices=JOB_STATUS_CHOICES, read_only=True)
@@ -36,7 +40,8 @@ class JobSerializer(serializers.ModelSerializer):
         uploaded_images = validated_data.pop('uploaded_images', [])
         job = Job.objects.create(**validated_data, status='open')
         for image in uploaded_images:
-            JobImage.objects.create(job=job, image=image)
+            if image:  # Only process non-empty files
+                JobImage.objects.create(job=job, image=image)
         return job
 
     def update(self, instance, validated_data):
@@ -44,8 +49,9 @@ class JobSerializer(serializers.ModelSerializer):
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
-        if uploaded_images is not None:
+        if uploaded_images is not None and uploaded_images != []:
             instance.images.all().delete()
             for image in uploaded_images:
-                JobImage.objects.create(job=instance, image=image)
+                if image:  # Only process non-empty files
+                    JobImage.objects.create(job=instance, image=image)
         return instance
