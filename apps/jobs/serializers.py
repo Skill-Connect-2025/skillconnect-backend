@@ -34,7 +34,18 @@ class JobSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         uploaded_images = validated_data.pop('uploaded_images', [])
-        job = Job.objects.create(**validated_data)
+        job = Job.objects.create(**validated_data, status='open')
         for image in uploaded_images:
             JobImage.objects.create(job=job, image=image)
         return job
+
+    def update(self, instance, validated_data):
+        uploaded_images = validated_data.pop('uploaded_images', None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        if uploaded_images is not None:
+            instance.images.all().delete()
+            for image in uploaded_images:
+                JobImage.objects.create(job=instance, image=image)
+        return instance
