@@ -1,0 +1,4 @@
+Alias /static/ /home/wisewaxb/api.skillconnect.wisewaytech.com/api/staticfiles/
+<Directory /home/wisewaxb/api.skillconnect.wisewaytech.com/api/staticfiles>
+    Require all granted
+</Directory>
