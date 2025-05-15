@@ -25,8 +25,8 @@ jobs:
     - name: copy env
       run: cp env.example .env
 
-    - name: Collect static files
-      run: python manage.py collectstatic --noinput
+    # - name: Collect static files
+    #   run: python manage.py collectstatic --noinput
 
     - name: 📂 Sync files
       uses: SamKirkland/FTP-Deploy-Action@4.1.0
