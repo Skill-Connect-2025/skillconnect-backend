@@ -10,7 +10,7 @@ Env.read_env(os.path.join(BASE_DIR, '.env'))
 
 SECRET_KEY = env('SECRET_KEY', default='django-insecure-$nym9i&u#%n=zi#7uz+5r28o62gek*x$#ox2njxf2))wtfo8n7')
 DEBUG = env.bool('DEBUG', default=True)
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'api@api.skillconnect.wisewaytech.com']
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'api@api.skillconnect.wisewaytech.com','api.skillconnect.wisewaytech.com']
 
 INSTALLED_APPS = [
     'django.contrib.admin',
