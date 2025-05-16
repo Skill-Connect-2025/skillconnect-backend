@@ -12,7 +12,7 @@ class JobCreateView(APIView):
     permission_classes = [IsAuthenticated, IsClient]
 
     @swagger_auto_schema(
-        operation_description="Create a new job (client only). Photos are optional. Use multipart/form-data. Authenticate with 'Token <your_token>' in Authorization header.",
+        operation_description="Create a new job. Photos are optional.",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
             required=['title', 'location', 'skills', 'description', 'category_id', 'payment_method'],
@@ -29,7 +29,7 @@ class JobCreateView(APIView):
                 ),
                 'uploaded_images': openapi.Schema(
                     type=openapi.TYPE_FILE,
-                    description='Optional image files (multiple files allowed, can be omitted)',
+                    description='Optional image files',
                     nullable=True
                 ),
             },
@@ -83,7 +83,7 @@ class JobUpdateView(APIView):
     permission_classes = [IsAuthenticated, IsClient]
 
     @swagger_auto_schema(
-        operation_description="Update a job (client only, full or partial updates allowed). Photos are optional. Use multipart/form-data.",
+        operation_description="Update a job. Photos are optional.",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
             properties={
@@ -99,7 +99,7 @@ class JobUpdateView(APIView):
                 ),
                 'uploaded_images': openapi.Schema(
                     type=openapi.TYPE_FILE,
-                    description='Optional image files (replaces existing images if provided, can be omitted)',
+                    description='Optional image files',
                     nullable=True
                 ),
             },
@@ -130,7 +130,7 @@ class JobDeleteView(APIView):
     permission_classes = [IsAuthenticated, IsClient]
 
     @swagger_auto_schema(
-        operation_description="Delete a job (client only).",
+        operation_description="Delete a job.",
         responses={
             204: 'No Content',
             401: 'Unauthorized',
