@@ -2,7 +2,7 @@ from django.urls import path
 from .views import (
     SelectSignupMethodView, SignupRequestView, GetCodeAgainView, VerifyAndCompleteView,
     LoginView, PasswordResetRequestView, PasswordResetConfirmView,
-    ClientProfileView, ProfileView
+    ClientProfileView, ProfileView, WorkerProfileView
 )
 
 urlpatterns = [
@@ -14,5 +14,6 @@ urlpatterns = [
     path('password/reset/', PasswordResetRequestView.as_view(), name='password-reset-request'),
     path('password/reset/confirm/', PasswordResetConfirmView.as_view(), name='password-reset-confirm'),
     path('profile/client/', ClientProfileView.as_view(), name='client-profile'),
+    path('profile/worker/', WorkerProfileView.as_view(), name='worker-profile'),
     path('profile/', ProfileView.as_view(), name='profile'),
 ]

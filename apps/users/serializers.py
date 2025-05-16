@@ -1,66 +1,67 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from .models import Client, Worker, VerificationToken
-import random
-from django.core.mail import send_mail
-from django.conf import settings
-from twilio.rest import Client as TwilioClient
-from django.utils import timezone
 from django.contrib.auth.password_validation import validate_password
-from django.db import transaction
+from django.db.models import Q
+from django.utils import timezone
+from .models import Client, Worker, VerificationToken, Education, Skill, TargetJob, Document
 
 User = get_user_model()
 
 class SelectSignupMethodSerializer(serializers.Serializer):
-    signup_method = serializers.ChoiceField(choices=['email', 'phone'])
+    identifier = serializers.CharField(max_length=255)
+    method = serializers.ChoiceField(choices=['email', 'phone'])
+
+    def validate(self, data):
+        identifier = data.get('identifier')
+        method = data.get('method')
+
+        if method == 'email':
+            if '@' not in identifier or '.' not in identifier:
+                raise serializers.ValidationError("Invalid email format.")
+        elif method == 'phone':
+            if not identifier.startswith('+') or not identifier[1:].isdigit():
+                raise serializers.ValidationError("Invalid phone number format. Use + followed by digits.")
+
+        user = User.get_by_identifier(identifier)
+        if user:
+            raise serializers.ValidationError({"identifier": "User with this identifier already exists."})
+
+        return data
 
     def save(self):
-        signup_method = self.validated_data['signup_method']
+        identifier = self.validated_data['identifier']
+        method = self.validated_data['method']
         user = User.objects.create(
-            username=f"temp_{random.randint(100000, 999999)}",
-            is_active=False,
-            signup_method=signup_method
+            email=identifier if method == 'email' else None,
+            phone_number=identifier if method == 'phone' else None,
+            signup_method=method
         )
         return user
 
 class SignupRequestSerializer(serializers.Serializer):
-    identifier = serializers.CharField()
     user_id = serializers.IntegerField()
+    identifier = serializers.CharField(max_length=255)
 
     def validate(self, data):
-        user = User.objects.filter(id=data['user_id'], is_active=False).first()
-        if not user:
-            raise serializers.ValidationError("Invalid user ID or user already active.")
-        if not user.signup_method:
-            raise serializers.ValidationError("Signup method not set for this user.")
-        data['signup_method'] = user.signup_method
-        if user.signup_method == 'email':
-            if not data['identifier'] or '@' not in data['identifier']:
-                raise serializers.ValidationError("Invalid email address.")
-            if User.objects.filter(email=data['identifier']).exclude(id=user.id).exists():
-                raise serializers.ValidationError("Email already registered.")
-        else:
-            if not data['identifier'].startswith('+') or len(data['identifier']) < 10:
-                raise serializers.ValidationError("Invalid phone number (e.g., +251912345678).")
-            if User.objects.filter(phone_number=data['identifier']).exclude(id=user.id).exists():
-                raise serializers.ValidationError("Phone number already registered.")
+        identifier = data.get('identifier')
+        user = User.objects.filter(id=data['user_id']).first()
+        if not user or user.is_verified:
+            raise serializers.ValidationError({"error": "User not found or already verified."})
+
+        if user.signup_method == 'email' and user.email != identifier:
+            raise serializers.ValidationError({"identifier": "Does not match the signup identifier."})
+        if user.signup_method == 'phone' and user.phone_number != identifier:
+            raise serializers.ValidationError({"identifier": "Does not match the signup identifier."})
+
         return data
 
     def save(self):
         user = User.objects.get(id=self.validated_data['user_id'])
         identifier = self.validated_data['identifier']
-        signup_method = self.validated_data['signup_method']
         code = str(random.randint(100000, 999999))
-
-        if signup_method == 'email':
-            user.email = identifier
-        else:
-            user.phone_number = identifier
-        user.save()
-
         VerificationToken.objects.create(user=user, code=code, purpose='registration')
 
-        if signup_method == 'email':
+        if user.signup_method == 'email':
             subject = "SkillConnect Verification Code"
             message = f"Your verification code is: {code}\nThis code expires in 10 minutes."
             send_mail(
@@ -71,7 +72,7 @@ class SignupRequestSerializer(serializers.Serializer):
                 fail_silently=False,
             )
         else:
-            twilio_client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)  # Fixed
+            twilio_client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
             message = f"Your SkillConnect verification code is: {code}"
             twilio_client.messages.create(
                 body=message,
@@ -79,91 +80,89 @@ class SignupRequestSerializer(serializers.Serializer):
                 to=identifier
             )
 
-        return user
-
 class VerifyAndCompleteSerializer(serializers.Serializer):
     user_id = serializers.IntegerField()
-    identifier = serializers.CharField()
     code = serializers.CharField(max_length=6)
-    first_name = serializers.CharField()
-    last_name = serializers.CharField()
-    password = serializers.CharField(write_only=True)
-    confirm_password = serializers.CharField(write_only=True)
-    role = serializers.ChoiceField(choices=['client', 'worker'])
+    username = serializers.CharField(max_length=150)
+    password = serializers.CharField(max_length=128, write_only=True)
+    role = serializers.ChoiceField(choices=['worker', 'client'])
+    first_name = serializers.CharField(max_length=30)
+    last_name = serializers.CharField(max_length=150)
 
     def validate(self, data):
-        user = User.objects.filter(id=data['user_id'], is_active=False).first()
+        user = User.objects.filter(id=data['user_id']).first()
         if not user:
-            raise serializers.ValidationError("Invalid user ID or user already active.")
+            raise serializers.ValidationError("User not found.")
         if user.is_verified:
             raise serializers.ValidationError("User already verified.")
-        if user.signup_method == 'email' and user.email != data['identifier']:
-            raise serializers.ValidationError("Identifier does not match the email provided.")
-        if user.signup_method == 'phone' and user.phone_number != data['identifier']:
-            raise serializers.ValidationError("Identifier does not match the phone number provided.")
+
         token = VerificationToken.objects.filter(
-            user=user, code=data['code'], purpose='registration', is_used=False, expires_at__gt=timezone.now()
+            user=user, code=data['code'], purpose='registration',
+            expires_at__gt=timezone.now(), is_used=False
         ).first()
         if not token:
-            raise serializers.ValidationError("Invalid or expired verification code.")
-        if data['password'] != data['confirm_password']:
-            raise serializers.ValidationError("Passwords do not match.")
-        validate_password(data['password'])
+            raise serializers.ValidationError("Invalid or expired code.")
+
+        validate_password(data['password'], user)
         return data
 
     def save(self):
         user = User.objects.get(id=self.validated_data['user_id'])
-        with transaction.atomic():
-            user.is_verified = True
-            user.is_active = True
-            user.first_name = self.validated_data['first_name']
-            user.last_name = self.validated_data['last_name']
-            user.username = f"{self.validated_data['first_name'].lower()}.{self.validated_data['last_name'].lower()}"
-            user.set_password(self.validated_data['password'])
-            user.save()
-            VerificationToken.objects.filter(user=user, code=self.validated_data['code']).update(is_used=True)
-            if self.validated_data['role'] == 'client':
-                Client.objects.create(user=user)  # This should now work
-            else:
-                Worker.objects.create(user=user)
+        user.username = self.validated_data['username']
+        user.set_password(self.validated_data['password'])
+        user.first_name = self.validated_data['first_name']
+        user.last_name = self.validated_data['last_name']
+        user.is_verified = True
+        user.save()
+
+        token = VerificationToken.objects.get(
+            user=user, code=self.validated_data['code'], purpose='registration'
+        )
+        token.is_used = True
+        token.save()
+
+        role = self.validated_data['role']
+        if role == 'worker':
+            Worker.objects.create(user=user, has_experience=False)
+        else:
+            Client.objects.create(user=user)
+
         return user
 
 class LoginSerializer(serializers.Serializer):
-    identifier = serializers.CharField()
-    password = serializers.CharField(write_only=True)
+    identifier = serializers.CharField(max_length=255)
+    password = serializers.CharField(max_length=128, write_only=True)
 
     def validate(self, data):
-        user = User.get_by_identifier(data['identifier'])
-        if not user:
-            raise serializers.ValidationError("Invalid email or phone number.")
-        if not user.is_verified or not user.is_active:
-            raise serializers.ValidationError("Account not verified or inactive.")
-        if not user.check_password(data['password']):
-            raise serializers.ValidationError("Invalid password.")
-        if user.is_superuser:
-            raise serializers.ValidationError("Admins cannot log in via this endpoint.")
-        return data
+        identifier = data.get('identifier')
+        password = data.get('password')
+        user = User.get_by_identifier(identifier)
+        if user and user.check_password(password):
+            if not user.is_verified:
+                raise serializers.ValidationError("User is not verified.")
+            return data
+        raise serializers.ValidationError("Invalid credentials.")
 
     def save(self):
-        user = User.get_by_identifier(self.validated_data['identifier'])
-        return user
+        identifier = self.validated_data['identifier']
+        return User.get_by_identifier(identifier)
 
 class PasswordResetRequestSerializer(serializers.Serializer):
-    identifier = serializers.CharField()
+    identifier = serializers.CharField(max_length=255)
 
-    def validate_identifier(self, value):
-        user = User.get_by_identifier(value)
+    def validate(self, data):
+        identifier = data.get('identifier')
+        user = User.get_by_identifier(identifier)
         if not user:
-            raise serializers.ValidationError("No user found with this email or phone number.")
-        if not user.email and not user.phone_number:
-            raise serializers.ValidationError("User has no email or phone number for reset.")
-        return value
+            raise serializers.ValidationError("User not found.")
+        if not user.is_verified:
+            raise serializers.ValidationError("User is not verified.")
+        return data
 
     def save(self):
         identifier = self.validated_data['identifier']
         user = User.get_by_identifier(identifier)
         code = str(random.randint(100000, 999999))
-
         VerificationToken.objects.create(user=user, code=code, purpose='password_reset')
 
         if user.email:
@@ -173,77 +172,70 @@ class PasswordResetRequestSerializer(serializers.Serializer):
                 subject,
                 message,
                 settings.DEFAULT_FROM_EMAIL,
-                [user.email],
+                [identifier],
                 fail_silently=False,
             )
-        elif user.phone_number:
-            twilio_client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)  # Fixed
+        else:
+            twilio_client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
             message = f"Your SkillConnect password reset code is: {code}"
             twilio_client.messages.create(
                 body=message,
                 from_=settings.TWILIO_PHONE_NUMBER,
-                to=user.phone_number
+                to=identifier
             )
 
 class PasswordResetConfirmSerializer(serializers.Serializer):
-    identifier = serializers.CharField()
+    identifier = serializers.CharField(max_length=255)
     code = serializers.CharField(max_length=6)
-    new_password = serializers.CharField(write_only=True)
-    confirm_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(max_length=128, write_only=True)
 
     def validate(self, data):
-        if data['new_password'] != data['confirm_password']:
-            raise serializers.ValidationError("Passwords do not match.")
-        validate_password(data['new_password'])
-        user = User.get_by_identifier(data['identifier'])
+        identifier = data.get('identifier')
+        user = User.get_by_identifier(identifier)
         if not user:
-            raise serializers.ValidationError("No user found with this identifier.")
+            raise serializers.ValidationError("User not found.")
+
         token = VerificationToken.objects.filter(
-            user=user, code=data['code'], purpose='password_reset', is_used=False, expires_at__gt=timezone.now()
+            user=user, code=data['code'], purpose='password_reset',
+            expires_at__gt=timezone.now(), is_used=False
         ).first()
         if not token:
-            raise serializers.ValidationError("Invalid or expired reset code.")
+            raise serializers.ValidationError("Invalid or expired code.")
+
+        validate_password(data['new_password'], user)
         return data
 
     def save(self):
-        user = User.get_by_identifier(self.validated_data['identifier'])
+        identifier = self.validated_data['identifier']
+        user = User.get_by_identifier(identifier)
         user.set_password(self.validated_data['new_password'])
         user.save()
-        VerificationToken.objects.filter(user=user, code=self.validated_data['code']).update(is_used=True)
 
-class ClientProfileSerializer(serializers.Serializer):
-    profile_pic = serializers.ImageField(required=False, allow_null=True)
-    location = serializers.CharField(required=True)
-
-    def validate(self, data):
-        if not data.get('location'):
-            raise serializers.ValidationError("Location is required.")
-        return data
-
-    def update(self, instance, validated_data):
-        instance.profile_pic = validated_data.get('profile_pic', instance.profile_pic)
-        instance.location = validated_data.get('location', instance.location)
-        instance.save()
-        return instance
-
-    def to_representation(self, instance):
-        return {
-            'profile_pic': instance.profile_pic.url if instance.profile_pic else None,
-            'location': instance.location
-        }
+        token = VerificationToken.objects.get(
+            user=user, code=self.validated_data['code'], purpose='password_reset'
+        )
+        token.is_used = True
+        token.save()
 
 class UserSerializer(serializers.ModelSerializer):
     role = serializers.SerializerMethodField()
     profile_pic = serializers.SerializerMethodField()
     location = serializers.SerializerMethodField()
+    cv = serializers.SerializerMethodField()
+    birthdate = serializers.SerializerMethodField()
+    nationality = serializers.SerializerMethodField()
+    gender = serializers.SerializerMethodField()
+    has_experience = serializers.SerializerMethodField()
+    educations = serializers.SerializerMethodField()
+    skills = serializers.SerializerMethodField()
+    target_jobs = serializers.SerializerMethodField()
+    documents = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'first_name', 'last_name', 'email', 'phone_number', 'role', 'profile_pic', 'location']
+        fields = ['id', 'username', 'first_name', 'last_name', 'email', 'phone_number', 'role', 'profile_pic', 'location', 'cv', 'birthdate', 'nationality', 'gender', 'has_experience', 'educations', 'skills', 'target_jobs', 'documents']
 
     def get_role(self, obj):
-        if obj.is_superuser:
-            return 'admin'
         if obj.is_client:
             return 'client'
         if obj.is_worker:
@@ -263,3 +255,174 @@ class UserSerializer(serializers.ModelSerializer):
         if obj.is_worker:
             return obj.worker.location
         return None
+
+    def get_cv(self, obj):
+        if obj.is_worker and obj.worker.cv:
+            return obj.worker.cv.url
+        return None
+
+    def get_birthdate(self, obj):
+        if obj.is_worker:
+            return obj.worker.birthdate
+        return None
+
+    def get_nationality(self, obj):
+        if obj.is_worker:
+            return obj.worker.nationality
+        return None
+
+    def get_gender(self, obj):
+        if obj.is_worker:
+            return obj.worker.gender
+        return None
+
+    def get_has_experience(self, obj):
+        if obj.is_worker:
+            return obj.worker.has_experience
+        return None
+
+    def get_educations(self, obj):
+        if obj.is_worker:
+            return EducationSerializer(obj.worker.educations.all(), many=True).data
+        return []
+
+    def get_skills(self, obj):
+        if obj.is_worker:
+            return SkillSerializer(obj.worker.skills.all(), many=True).data
+        return []
+
+    def get_target_jobs(self, obj):
+        if obj.is_worker:
+            return TargetJobSerializer(obj.worker.target_jobs.all(), many=True).data
+        return []
+
+    def get_documents(self, obj):
+        if obj.is_worker:
+            return [doc.file.url for doc in obj.worker.documents.all()]
+        return []
+
+class ClientProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Client
+        fields = ['profile_pic', 'location']
+
+class EducationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Education
+        fields = ['institute_name', 'level_of_study', 'field_of_study', 'country', 'city', 'graduation_month', 'graduation_year']
+
+class SkillSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Skill
+        fields = ['name', 'level']
+
+class TargetJobSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TargetJob
+        fields = ['job_title', 'level', 'open_to_work']
+
+class DocumentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Document
+        fields = ['file']
+
+class WorkerProfileSerializer(serializers.Serializer):
+    cv = serializers.FileField(required=False, allow_null=True)
+    birthdate_day = serializers.IntegerField(min_value=1, max_value=31)
+    birthdate_month = serializers.CharField()
+    birthdate_year = serializers.IntegerField(min_value=1900, max_value=2025)
+    location = serializers.CharField(required=True)
+    nationality = serializers.CharField(required=True)
+    gender = serializers.CharField(required=True)
+    email = serializers.EmailField(required=False, allow_null=True)
+    phone_number = serializers.CharField(required=False, allow_null=True)
+    has_experience = serializers.BooleanField(required=True)
+    educations = EducationSerializer(many=True, required=True)
+    skills = SkillSerializer(many=True, required=True)
+    target_jobs = TargetJobSerializer(many=True, required=True)
+    documents = serializers.ListField(
+        child=serializers.FileField(), required=False, allow_empty=True
+    )
+
+    def validate(self, data):
+        try:
+            birthdate = f"{data['birthdate_year']}-{data['birthdate_month']}-{data['birthdate_day']}"
+            from datetime import datetime
+            datetime.strptime(birthdate, '%Y-%B-%d')
+        except ValueError:
+            try:
+                birthdate = f"{data['birthdate_year']}-{data['birthdate_month']}-{data['birthdate_day']}"
+                datetime.strptime(birthdate, '%Y-%m-%d')
+            except ValueError:
+                raise serializers.ValidationError("Invalid birthdate format. Use a valid month (e.g., 'May' or '05').")
+
+        if not data.get('skills'):
+            raise serializers.ValidationError("At least one skill is required.")
+        if not data.get('target_jobs'):
+            raise serializers.ValidationError("At least one target job is required.")
+        user = self.context['request'].user
+        if not user.email and not data.get('email'):
+            raise serializers.ValidationError("Email is required if not set during signup.")
+        if not user.phone_number and not data.get('phone_number'):
+            raise serializers.ValidationError("Phone number is required if not set during signup.")
+        return data
+
+    def update(self, instance, validated_data):
+        from datetime import datetime
+        try:
+            birthdate = datetime.strptime(
+                f"{validated_data['birthdate_year']}-{validated_data['birthdate_month']}-{validated_data['birthdate_day']}",
+                '%Y-%B-%d'
+            ).date()
+        except ValueError:
+            birthdate = datetime.strptime(
+                f"{validated_data['birthdate_year']}-{validated_data['birthdate_month']}-{validated_data['birthdate_day']}",
+                '%Y-%m-%d'
+            ).date()
+
+        instance.cv = validated_data.get('cv', instance.cv)
+        instance.birthdate = birthdate
+        instance.location = validated_data.get('location', instance.location)
+        instance.nationality = validated_data.get('nationality', instance.nationality)
+        instance.gender = validated_data.get('gender', instance.gender)
+        instance.has_experience = validated_data.get('has_experience', instance.has_experience)
+        instance.save()
+
+        user = instance.user
+        user.email = validated_data.get('email', user.email)
+        user.phone_number = validated_data.get('phone_number', user.phone_number)
+        user.save()
+
+        instance.educations.all().delete()
+        for education_data in validated_data.get('educations', []):
+            Education.objects.create(worker=instance, **education_data)
+
+        instance.skills.all().delete()
+        for skill_data in validated_data.get('skills', []):
+            Skill.objects.create(worker=instance, **skill_data)
+
+        instance.target_jobs.all().delete()
+        for target_job_data in validated_data.get('target_jobs', []):
+            TargetJob.objects.create(worker=instance, **target_job_data)
+
+        instance.documents.all().delete()
+        for document_file in validated_data.get('documents', []):
+            Document.objects.create(worker=instance, file=document_file)
+
+        return instance
+
+    def to_representation(self, instance):
+        return {
+            'cv': instance.cv.url if instance.cv else None,
+            'birthdate': instance.birthdate.isoformat() if instance.birthdate else None,
+            'location': instance.location,
+            'nationality': instance.nationality,
+            'gender': instance.gender,
+            'email': instance.user.email,
+            'phone_number': instance.user.phone_number,
+            'has_experience': instance.has_experience,
+            'educations': EducationSerializer(instance.educations.all(), many=True).data,
+            'skills': SkillSerializer(instance.skills.all(), many=True).data,
+            'target_jobs': TargetJobSerializer(instance.target_jobs.all(), many=True).data,
+            'documents': [doc.file.url for doc in instance.documents.all()],
+        }

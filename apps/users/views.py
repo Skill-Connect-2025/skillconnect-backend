@@ -7,7 +7,7 @@ from drf_yasg import openapi
 from .serializers import (
     SelectSignupMethodSerializer, SignupRequestSerializer, VerifyAndCompleteSerializer,
     LoginSerializer, PasswordResetRequestSerializer, PasswordResetConfirmSerializer,
-    ClientProfileSerializer, UserSerializer
+    ClientProfileSerializer, UserSerializer, WorkerProfileSerializer
 )
 from .permissions import RoleBasedPermission
 from .models import VerificationToken
@@ -210,3 +210,45 @@ class ProfileView(APIView):
     def get(self, request):
         serializer = UserSerializer(request.user)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+class WorkerProfileView(APIView):
+    permission_classes = [permissions.IsAuthenticated, RoleBasedPermission]
+    required_role = 'worker'
+
+    @swagger_auto_schema(
+        responses={
+            200: WorkerProfileSerializer,
+            401: 'Unauthorized',
+            403: 'Forbidden'
+        }
+    )
+    def get(self, request):
+        if not hasattr(request.user, 'worker'):
+            return Response({"error": "User is not a worker"}, status=status.HTTP_403_FORBIDDEN)
+        worker = request.user.worker
+        serializer = WorkerProfileSerializer(worker, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        request_body=WorkerProfileSerializer,
+        responses={
+            200: WorkerProfileSerializer,
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden'
+        }
+    )
+    def put(self, request):
+        if not hasattr(request.user, 'worker'):
+            return Response({"error": "User is not a worker"}, status=status.HTTP_403_FORBIDDEN)
+        worker = request.user.worker
+        serializer = WorkerProfileSerializer(
+            instance=worker,
+            data=request.data,
+            context={'request': request},
+            partial=True
+        )
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
