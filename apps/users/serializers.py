@@ -221,7 +221,6 @@ class UserSerializer(serializers.ModelSerializer):
     role = serializers.SerializerMethodField()
     profile_pic = serializers.SerializerMethodField()
     location = serializers.SerializerMethodField()
-    cv = serializers.SerializerMethodField()
     birthdate = serializers.SerializerMethodField()
     nationality = serializers.SerializerMethodField()
     gender = serializers.SerializerMethodField()
@@ -233,7 +232,7 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'first_name', 'last_name', 'email', 'phone_number', 'role', 'profile_pic', 'location', 'cv', 'birthdate', 'nationality', 'gender', 'has_experience', 'educations', 'skills', 'target_jobs', 'documents']
+        fields = ['id', 'username', 'first_name', 'last_name', 'email', 'phone_number', 'role', 'profile_pic', 'location', 'birthdate', 'nationality', 'gender', 'has_experience', 'educations', 'skills', 'target_jobs', 'documents']
 
     def get_role(self, obj):
         if obj.is_client:
@@ -254,11 +253,6 @@ class UserSerializer(serializers.ModelSerializer):
             return obj.client.location
         if obj.is_worker:
             return obj.worker.location
-        return None
-
-    def get_cv(self, obj):
-        if obj.is_worker and obj.worker.cv:
-            return obj.worker.cv.url
         return None
 
     def get_birthdate(self, obj):
@@ -327,7 +321,6 @@ class DocumentSerializer(serializers.ModelSerializer):
         fields = ['file']
 
 class WorkerProfileSerializer(serializers.Serializer):
-    cv = serializers.FileField(required=False, allow_null=True)
     birthdate_day = serializers.IntegerField(min_value=1, max_value=31)
     birthdate_month = serializers.CharField()
     birthdate_year = serializers.IntegerField(min_value=1900, max_value=2025)
@@ -380,7 +373,6 @@ class WorkerProfileSerializer(serializers.Serializer):
                 '%Y-%m-%d'
             ).date()
 
-        instance.cv = validated_data.get('cv', instance.cv)
         instance.birthdate = birthdate
         instance.location = validated_data.get('location', instance.location)
         instance.nationality = validated_data.get('nationality', instance.nationality)
@@ -413,7 +405,6 @@ class WorkerProfileSerializer(serializers.Serializer):
 
     def to_representation(self, instance):
         return {
-            'cv': instance.cv.url if instance.cv else None,
             'birthdate': instance.birthdate.isoformat() if instance.birthdate else None,
             'location': instance.location,
             'nationality': instance.nationality,

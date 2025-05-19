@@ -34,7 +34,6 @@ class Worker(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='worker')
     profile_pic = models.ImageField(upload_to='profile_pics/', blank=True, null=True)
     location = models.CharField(max_length=100, blank=True, null=True)
-    cv = models.FileField(upload_to='worker_cvs/', blank=True, null=True)
     birthdate = models.DateField(blank=True, null=True)
     nationality = models.CharField(max_length=100, blank=True, null=True)
     gender = models.CharField(max_length=10, blank=True, null=True)
