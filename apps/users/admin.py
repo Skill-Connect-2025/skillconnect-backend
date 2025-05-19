@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import User, Client, Worker, VerificationToken, Education, Skill, TargetJob, Document
+from .models import User, Client, Worker, VerificationToken, Education, Skill, TargetJob
 
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
@@ -37,8 +37,3 @@ class SkillAdmin(admin.ModelAdmin):
 class TargetJobAdmin(admin.ModelAdmin):
     list_display = ('worker', 'job_title', 'level', 'open_to_work')
     search_fields = ('worker__user__username', 'job_title')
-
-@admin.register(Document)
-class DocumentAdmin(admin.ModelAdmin):
-    list_display = ('worker', 'file', 'uploaded_at')
-    search_fields = ('worker__user__username',)

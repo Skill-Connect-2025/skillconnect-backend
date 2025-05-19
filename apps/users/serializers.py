@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.db.models import Q
 from django.utils import timezone
-from .models import Client, Worker, VerificationToken, Education, Skill, TargetJob, Document
+from .models import Client, Worker, VerificationToken, Education, Skill, TargetJob
 
 User = get_user_model()
 
@@ -228,11 +228,10 @@ class UserSerializer(serializers.ModelSerializer):
     educations = serializers.SerializerMethodField()
     skills = serializers.SerializerMethodField()
     target_jobs = serializers.SerializerMethodField()
-    documents = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'first_name', 'last_name', 'email', 'phone_number', 'role', 'profile_pic', 'location', 'birthdate', 'nationality', 'gender', 'has_experience', 'educations', 'skills', 'target_jobs', 'documents']
+        fields = ['id', 'username', 'first_name', 'last_name', 'email', 'phone_number', 'role', 'profile_pic', 'location', 'birthdate', 'nationality', 'gender', 'has_experience', 'educations', 'skills', 'target_jobs']
 
     def get_role(self, obj):
         if obj.is_client:
@@ -290,11 +289,6 @@ class UserSerializer(serializers.ModelSerializer):
             return TargetJobSerializer(obj.worker.target_jobs.all(), many=True).data
         return []
 
-    def get_documents(self, obj):
-        if obj.is_worker:
-            return [doc.file.url for doc in obj.worker.documents.all()]
-        return []
-
 class ClientProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = Client
@@ -315,10 +309,6 @@ class TargetJobSerializer(serializers.ModelSerializer):
         model = TargetJob
         fields = ['job_title', 'level', 'open_to_work']
 
-class DocumentSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Document
-        fields = ['file']
 
 class WorkerProfileSerializer(serializers.Serializer):
     birthdate_day = serializers.IntegerField(min_value=1, max_value=31)
@@ -333,9 +323,6 @@ class WorkerProfileSerializer(serializers.Serializer):
     educations = EducationSerializer(many=True, required=True)
     skills = SkillSerializer(many=True, required=True)
     target_jobs = TargetJobSerializer(many=True, required=True)
-    documents = serializers.ListField(
-        child=serializers.FileField(), required=False, allow_empty=True
-    )
 
     def validate(self, data):
         try:
@@ -397,11 +384,6 @@ class WorkerProfileSerializer(serializers.Serializer):
         for target_job_data in validated_data.get('target_jobs', []):
             TargetJob.objects.create(worker=instance, **target_job_data)
 
-        instance.documents.all().delete()
-        for document_file in validated_data.get('documents', []):
-            Document.objects.create(worker=instance, file=document_file)
-
-        return instance
 
     def to_representation(self, instance):
         return {
@@ -415,5 +397,4 @@ class WorkerProfileSerializer(serializers.Serializer):
             'educations': EducationSerializer(instance.educations.all(), many=True).data,
             'skills': SkillSerializer(instance.skills.all(), many=True).data,
             'target_jobs': TargetJobSerializer(instance.target_jobs.all(), many=True).data,
-            'documents': [doc.file.url for doc in instance.documents.all()],
         }
