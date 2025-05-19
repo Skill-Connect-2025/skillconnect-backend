@@ -1,6 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 from django.utils import timezone
+from datetime import datetime
 
 class User(AbstractUser):
     email = models.EmailField(blank=True, null=True, unique=True)
@@ -38,6 +39,15 @@ class Worker(models.Model):
     nationality = models.CharField(max_length=100, blank=True, null=True)
     gender = models.CharField(max_length=10, blank=True, null=True)
     has_experience = models.BooleanField(default=False)
+    join_date = models.DateTimeField(default=timezone.now, null=True) 
+
+    @property
+    def years_of_experience(self):
+        if self.join_date:
+            delta = datetime.now(timezone.utc) - self.join_date
+            years = delta.days / 365.25 
+            return round(years, 2) 
+        return 0.0
 
     def __str__(self):
         return f"Worker: {self.user.username}"

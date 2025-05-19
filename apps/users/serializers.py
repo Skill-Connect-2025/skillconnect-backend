@@ -4,6 +4,8 @@ from django.contrib.auth.password_validation import validate_password
 from django.db.models import Q
 from django.utils import timezone
 from .models import Client, Worker, VerificationToken, Education, Skill, TargetJob
+from datetime import datetime
+
 
 User = get_user_model()
 
@@ -217,6 +219,8 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         token.is_used = True
         token.save()
 
+
+
 class UserSerializer(serializers.ModelSerializer):
     role = serializers.SerializerMethodField()
     profile_pic = serializers.SerializerMethodField()
@@ -225,13 +229,19 @@ class UserSerializer(serializers.ModelSerializer):
     nationality = serializers.SerializerMethodField()
     gender = serializers.SerializerMethodField()
     has_experience = serializers.SerializerMethodField()
+    years_of_experience = serializers.SerializerMethodField() 
     educations = serializers.SerializerMethodField()
     skills = serializers.SerializerMethodField()
     target_jobs = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'first_name', 'last_name', 'email', 'phone_number', 'role', 'profile_pic', 'location', 'birthdate', 'nationality', 'gender', 'has_experience', 'educations', 'skills', 'target_jobs']
+        fields = [
+            'id', 'username', 'first_name', 'last_name',
+            'role', 'profile_pic', 'location', 'birthdate', 'nationality', 'gender',
+            'has_experience', 'years_of_experience', 'educations', 'skills', 'target_jobs'
+        ]
+        
 
     def get_role(self, obj):
         if obj.is_client:
@@ -274,6 +284,11 @@ class UserSerializer(serializers.ModelSerializer):
             return obj.worker.has_experience
         return None
 
+    def get_years_of_experience(self, obj):
+        if obj.is_worker:
+            return obj.worker.years_of_experience
+        return None
+
     def get_educations(self, obj):
         if obj.is_worker:
             return EducationSerializer(obj.worker.educations.all(), many=True).data
@@ -309,7 +324,6 @@ class TargetJobSerializer(serializers.ModelSerializer):
         model = TargetJob
         fields = ['job_title', 'level', 'open_to_work']
 
-
 class WorkerProfileSerializer(serializers.Serializer):
     birthdate_day = serializers.IntegerField(min_value=1, max_value=31)
     birthdate_month = serializers.CharField()
@@ -323,11 +337,13 @@ class WorkerProfileSerializer(serializers.Serializer):
     educations = EducationSerializer(many=True, required=True)
     skills = SkillSerializer(many=True, required=True)
     target_jobs = TargetJobSerializer(many=True, required=True)
+    years_of_experience = serializers.FloatField(read_only=True)
+    class Meta:
+        ref_name = 'UsersWorkerProfile' 
 
     def validate(self, data):
         try:
             birthdate = f"{data['birthdate_year']}-{data['birthdate_month']}-{data['birthdate_day']}"
-            from datetime import datetime
             datetime.strptime(birthdate, '%Y-%B-%d')
         except ValueError:
             try:
@@ -348,7 +364,6 @@ class WorkerProfileSerializer(serializers.Serializer):
         return data
 
     def update(self, instance, validated_data):
-        from datetime import datetime
         try:
             birthdate = datetime.strptime(
                 f"{validated_data['birthdate_year']}-{validated_data['birthdate_month']}-{validated_data['birthdate_day']}",
@@ -384,6 +399,7 @@ class WorkerProfileSerializer(serializers.Serializer):
         for target_job_data in validated_data.get('target_jobs', []):
             TargetJob.objects.create(worker=instance, **target_job_data)
 
+        return instance
 
     def to_representation(self, instance):
         return {
@@ -394,6 +410,7 @@ class WorkerProfileSerializer(serializers.Serializer):
             'email': instance.user.email,
             'phone_number': instance.user.phone_number,
             'has_experience': instance.has_experience,
+            'years_of_experience': instance.years_of_experience, 
             'educations': EducationSerializer(instance.educations.all(), many=True).data,
             'skills': SkillSerializer(instance.skills.all(), many=True).data,
             'target_jobs': TargetJobSerializer(instance.target_jobs.all(), many=True).data,

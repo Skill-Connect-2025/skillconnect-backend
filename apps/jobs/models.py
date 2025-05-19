@@ -1,7 +1,7 @@
-# apps/jobs/models.py
 from django.db import models
 from django.conf import settings
 from core.constants import JOB_STATUS_CHOICES, PAYMENT_METHOD_CHOICES
+from apps.users.models import Worker
 
 class Category(models.Model):
     name = models.CharField(max_length=100, unique=True)
@@ -30,3 +30,26 @@ class JobImage(models.Model):
 
     def __str__(self):
         return f"Image for {self.job.title}"
+
+class JobApplication(models.Model):
+    job = models.ForeignKey(Job, on_delete=models.CASCADE, related_name='applications')
+    worker = models.ForeignKey(Worker, on_delete=models.CASCADE, related_name='applications')
+    status = models.CharField(max_length=20, choices=JOB_STATUS_CHOICES, default='pending')
+    applied_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('job', 'worker')
+
+    def __str__(self):
+        return f"{self.worker.user.username} applied to {self.job.title}"
+
+class JobRequest(models.Model):
+    application = models.ForeignKey(JobApplication, on_delete=models.CASCADE, related_name='requests')
+    status = models.CharField(max_length=20, choices= JOB_STATUS_CHOICES, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('application',)
+
+    def __str__(self):
+        return f"Request for {self.application.worker.user.username} on {self.application.job.title}"

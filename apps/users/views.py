@@ -88,7 +88,7 @@ class GetCodeAgainView(APIView):
                     fail_silently=False,
                 )
             else:
-                twilio_client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)  # Fixed
+                twilio_client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN) 
                 message = f"Your new SkillConnect verification code is: {code}"
                 twilio_client.messages.create(
                     body=message,
