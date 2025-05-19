@@ -3,7 +3,7 @@ from .views import (
     JobCreateView, JobListView, JobDetailView,
     JobUpdateView, JobDeleteView, OpenJobListView,
     JobApplicationView, JobApplicationsListView,
-    JobRequestView, JobRequestResponseView
+    JobRequestView, JobRequestResponseView, JobStatusUpdateView, JobPaymentRequestView
 )
 
 urlpatterns = [
@@ -17,4 +17,7 @@ urlpatterns = [
     path('<int:pk>/applications/', JobApplicationsListView.as_view(), name='job-applications'),
     path('<int:pk>/request/', JobRequestView.as_view(), name='job-request'),
     path('<int:pk>/request/<int:request_id>/respond/', JobRequestResponseView.as_view(), name='job-request-respond'),
+    path('<int:pk>/status/', JobStatusUpdateView.as_view(), name='job-status-update'),
+    path('<int:pk>/payment/request/', JobPaymentRequestView.as_view(), name='job-payment-request'),
+    
 ]

@@ -10,8 +10,6 @@ JOB_STATUS_CHOICES = (
 )
 
 PAYMENT_METHOD_CHOICES = (
-    ('telebirr', 'TeleBirr'),
     ('chapa', 'Chapa'),
-    ('e_birr', 'E-Birr'),
     ('cash', 'Cash'),
 )

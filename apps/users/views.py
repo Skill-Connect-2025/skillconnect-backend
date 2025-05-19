@@ -9,6 +9,11 @@ from .serializers import (
     LoginSerializer, PasswordResetRequestSerializer, PasswordResetConfirmSerializer,
     ClientProfileSerializer, UserSerializer, WorkerProfileSerializer
 )
+from apps.jobs.models import JobApplication
+from apps.jobs.serializers import JobApplicationSerializer
+from core.utils import IsWorker
+from django.core.mail import send_mail
+from django.contrib.auth import get_user_model
 from .permissions import RoleBasedPermission
 from .models import VerificationToken
 from django.utils import timezone
@@ -252,3 +257,20 @@ class WorkerProfileView(APIView):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class UserApplicationsView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsWorker]
+
+    @swagger_auto_schema(
+        operation_description="List all applications submitted by the worker.",
+        responses={
+            200: JobApplicationSerializer(many=True),
+            401: 'Unauthorized',
+            403: 'Forbidden'
+        }
+    )
+    def get(self, request):
+        applications = JobApplication.objects.filter(worker=request.user.worker)
+        serializer = JobApplicationSerializer(applications, many=True)
+        return Response(serializer.data)

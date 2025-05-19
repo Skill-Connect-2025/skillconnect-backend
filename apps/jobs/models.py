@@ -20,6 +20,9 @@ class Job(models.Model):
     status = models.CharField(max_length=20, choices=JOB_STATUS_CHOICES, default='open')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    assigned_worker = models.ForeignKey(
+        Worker, on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_jobs'
+    )
 
     def __str__(self):
         return f"{self.title} ({self.status})"
@@ -53,3 +56,12 @@ class JobRequest(models.Model):
 
     def __str__(self):
         return f"Request for {self.application.worker.user.username} on {self.application.job.title}"
+
+class PaymentRequest(models.Model):
+    job = models.OneToOneField(Job, on_delete=models.CASCADE, related_name='payment_request')
+    worker = models.ForeignKey(Worker, on_delete=models.CASCADE)
+    message = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Payment request for {self.job.title} by {self.worker.user.username}"

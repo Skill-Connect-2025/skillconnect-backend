@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import Job, JobImage, Category, JobApplication, JobRequest
 from apps.users.models import Worker
+from .models import PaymentRequest
 from apps.users.serializers import UserSerializer
 from core.constants import JOB_STATUS_CHOICES, PAYMENT_METHOD_CHOICES
 
@@ -66,6 +67,23 @@ class JobRequestSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("A request has already been sent for this application.")
         return data
 
+class PaymentRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PaymentRequest
+        fields = ['id', 'job', 'worker', 'message', 'created_at']
+        read_only_fields = ['worker', 'created_at']
+
+    def validate(self, data):
+        job = data['job']
+        if job.status != 'completed':
+            raise serializers.ValidationError("Cannot request payment for a non-completed job.")
+        if job.assigned_worker != self.context['request'].user.worker:
+            raise serializers.ValidationError("Only the assigned worker can request payment.")
+        if PaymentRequest.objects.filter(job=job).exists():
+            raise serializers.ValidationError("Payment request already exists.")
+        return data
+
+
 class JobSerializer(serializers.ModelSerializer):
     category = CategorySerializer(read_only=True)
     category_id = serializers.PrimaryKeyRelatedField(
@@ -82,13 +100,14 @@ class JobSerializer(serializers.ModelSerializer):
     payment_method = serializers.ChoiceField(choices=PAYMENT_METHOD_CHOICES)
     status = serializers.ChoiceField(choices=JOB_STATUS_CHOICES, read_only=True)
     applications = JobApplicationSerializer(many=True, read_only=True)
+    assigned_worker = WorkerProfileSerializer(read_only=True)
 
     class Meta:
         model = Job
         fields = [
             'id', 'title', 'location', 'skills', 'description', 'category',
             'category_id', 'payment_method', 'status', 'created_at', 'updated_at',
-            'images', 'uploaded_images', 'applications'
+            'images', 'uploaded_images', 'applications', 'assigned_worker'
         ]
 
     def create(self, validated_data):

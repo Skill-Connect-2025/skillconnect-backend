@@ -5,7 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 from .models import Job, JobApplication, JobRequest
-from .serializers import JobSerializer, JobApplicationSerializer, JobRequestSerializer
+from .serializers import JobSerializer, JobApplicationSerializer, JobRequestSerializer, PaymentRequestSerializer
 from core.utils import IsClient, IsWorker
 from django.core.mail import send_mail
 from django.conf import settings
@@ -267,6 +267,65 @@ class JobRequestResponseView(APIView):
         if status == 'accepted':
             job_request.application.status = 'accepted'
             job_request.application.save()
+            job.assigned_worker = request.user.worker
+            job.status = 'in_progress'
+            job.save()
+            # Notify client with worker contact details
+            send_mail(
+                subject=f"Worker Accepted Request for Job: {job.title}",
+                message=f"Worker {request.user.username} accepted your request. Contact them at {request.user.email} or {request.user.phone_number}.",
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[job.client.email],
+                fail_silently=True,
+            )
+            # Notify worker of assignment
+            send_mail(
+                subject=f"Assigned to Job: {job.title}",
+                message=f"You have been assigned to job: {job.title}. Contact the client at {job.client.email}.",
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[request.user.email],
+                fail_silently=True,
+            )
+        else:
+            job_request.application.status = 'rejected'
+            job_request.application.save()
+        serializer = JobRequestSerializer(job_request)
+        return Response(serializer.data)
+    permission_classes = [IsAuthenticated, IsWorker]
+
+    @swagger_auto_schema(
+        operation_description="Accept or reject a job request.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['status'],
+            properties={
+                'status': openapi.Schema(type=openapi.TYPE_STRING, enum=['accepted', 'rejected'])
+            },
+        ),
+        responses={
+            200: JobRequestSerializer,
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def post(self, request, pk, request_id):
+        try:
+            job = Job.objects.get(pk=pk)
+            job_request = JobRequest.objects.get(id=request_id, application__job=job, application__worker=request.user.worker)
+        except (Job.DoesNotExist, JobRequest.DoesNotExist):
+            return Response({"error": "Job or request not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
+        if job_request.status != 'pending':
+            return Response({"error": "Request already processed"}, status=status.HTTP_400_BAD_REQUEST)
+        status = request.data.get('status')
+        if status not in ['accepted', 'rejected']:
+            return Response({"error": "Invalid status"}, status=status.HTTP_400_BAD_REQUEST)
+        job_request.status = status
+        job_request.save()
+        if status == 'accepted':
+            job_request.application.status = 'accepted'
+            job_request.application.save()
             # Notify client with worker contact details
             send_mail(
                 subject=f"Worker Accepted Request for Job: {job.title}",
@@ -280,3 +339,89 @@ class JobRequestResponseView(APIView):
             job_request.application.save()
         serializer = JobRequestSerializer(job_request)
         return Response(serializer.data)
+
+class JobStatusUpdateView(APIView):
+    permission_classes = [IsAuthenticated, IsClient]
+
+    @swagger_auto_schema(
+        operation_description="Update job status to completed.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['status'],
+            properties={
+                'status': openapi.Schema(type=openapi.TYPE_STRING, enum=['completed'])
+            },
+        ),
+        responses={
+            200: JobSerializer,
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def put(self, request, pk):
+        try:
+            job = Job.objects.get(pk=pk, client=request.user)
+        except Job.DoesNotExist:
+            return Response({"error": "Job not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
+        status = request.data.get('status')
+        if status != 'completed':
+            return Response({"error": "Invalid status. Only 'completed' is allowed."}, status=status.HTTP_400_BAD_REQUEST)
+        if job.status != 'in_progress':
+            return Response({"error": "Job must be in progress to mark as completed."}, status=status.HTTP_400_BAD_REQUEST)
+        job.status = status
+        job.save()
+        # Notify worker
+        send_mail(
+            subject=f"Job Completed: {job.title}",
+            message=f"The client marked job '{job.title}' as completed. You can now request payment.",
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[job.assigned_worker.user.email],
+            fail_silently=True,
+        )
+        serializer = JobSerializer(job)
+        return Response(serializer.data)
+
+class JobPaymentRequestView(APIView):
+    permission_classes = [IsAuthenticated, IsWorker]
+
+    @swagger_auto_schema(
+        operation_description="Worker requests payment for a completed job.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'message': openapi.Schema(type=openapi.TYPE_STRING, description='Optional message')
+            },
+        ),
+        responses={
+            201: PaymentRequestSerializer,
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def post(self, request, pk):
+        try:
+            job = Job.objects.get(pk=pk, assigned_worker=request.user.worker)
+        except Job.DoesNotExist:
+            return Response({"error": "Job not found or not assigned to you"}, status=status.HTTP_404_NOT_FOUND)
+        data = request.data.copy()
+        data['job'] = job.id
+        data['worker'] = request.user.worker.id
+        serializer = PaymentRequestSerializer(data=data, context={'request': request})
+        if serializer.is_valid():
+            payment_request = serializer.save()
+            job.status = 'pending_payment'
+            job.save()
+            # Notify client
+            send_mail(
+                subject=f"Payment Request for Job: {job.title}",
+                message=f"Worker {request.user.username} requested payment for job: {job.title}. Contact them at {request.user.email} or {request.user.phone_number}.",
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[job.client.email],
+                fail_silently=True,
+            )
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

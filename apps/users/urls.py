@@ -2,7 +2,7 @@ from django.urls import path
 from .views import (
     SelectSignupMethodView, SignupRequestView, GetCodeAgainView, VerifyAndCompleteView,
     LoginView, PasswordResetRequestView, PasswordResetConfirmView,
-    ClientProfileView, ProfileView, WorkerProfileView
+    ClientProfileView, ProfileView, WorkerProfileView, UserApplicationsView
 )
 
 urlpatterns = [
@@ -16,4 +16,5 @@ urlpatterns = [
     path('profile/client/', ClientProfileView.as_view(), name='client-profile'),
     path('profile/worker/', WorkerProfileView.as_view(), name='worker-profile'),
     path('profile/', ProfileView.as_view(), name='profile'),
+    path('applications/', UserApplicationsView.as_view(), name='user-applications'),
 ]
