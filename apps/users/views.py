@@ -7,8 +7,13 @@ from drf_yasg import openapi
 from .serializers import (
     SelectSignupMethodSerializer, SignupRequestSerializer, VerifyAndCompleteSerializer,
     LoginSerializer, PasswordResetRequestSerializer, PasswordResetConfirmSerializer,
-    ClientProfileSerializer, UserSerializer
+    ClientProfileSerializer, UserSerializer, WorkerProfileSerializer
 )
+from apps.jobs.models import JobApplication
+from apps.jobs.serializers import JobApplicationSerializer
+from core.utils import IsWorker
+from django.core.mail import send_mail
+from django.contrib.auth import get_user_model
 from .permissions import RoleBasedPermission
 from .models import VerificationToken
 from django.utils import timezone
@@ -88,7 +93,7 @@ class GetCodeAgainView(APIView):
                     fail_silently=False,
                 )
             else:
-                twilio_client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)  # Fixed
+                twilio_client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN) 
                 message = f"Your new SkillConnect verification code is: {code}"
                 twilio_client.messages.create(
                     body=message,
@@ -210,3 +215,62 @@ class ProfileView(APIView):
     def get(self, request):
         serializer = UserSerializer(request.user)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+class WorkerProfileView(APIView):
+    permission_classes = [permissions.IsAuthenticated, RoleBasedPermission]
+    required_role = 'worker'
+
+    @swagger_auto_schema(
+        responses={
+            200: WorkerProfileSerializer,
+            401: 'Unauthorized',
+            403: 'Forbidden'
+        }
+    )
+    def get(self, request):
+        if not hasattr(request.user, 'worker'):
+            return Response({"error": "User is not a worker"}, status=status.HTTP_403_FORBIDDEN)
+        worker = request.user.worker
+        serializer = WorkerProfileSerializer(worker, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        request_body=WorkerProfileSerializer,
+        responses={
+            200: WorkerProfileSerializer,
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden'
+        }
+    )
+    def put(self, request):
+        if not hasattr(request.user, 'worker'):
+            return Response({"error": "User is not a worker"}, status=status.HTTP_403_FORBIDDEN)
+        worker = request.user.worker
+        serializer = WorkerProfileSerializer(
+            instance=worker,
+            data=request.data,
+            context={'request': request},
+            partial=True
+        )
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class UserApplicationsView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsWorker]
+
+    @swagger_auto_schema(
+        operation_description="List all applications submitted by the worker.",
+        responses={
+            200: JobApplicationSerializer(many=True),
+            401: 'Unauthorized',
+            403: 'Forbidden'
+        }
+    )
+    def get(self, request):
+        applications = JobApplication.objects.filter(worker=request.user.worker)
+        serializer = JobApplicationSerializer(applications, many=True)
+        return Response(serializer.data)

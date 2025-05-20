@@ -21,4 +21,4 @@ urlpatterns = [
     path('disputes/', include('apps.disputes.urls')),
     path('notifications/', include('apps.notifications.urls')),
     path('recommendations/', include('apps.recommendations.urls')),
-] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+]
