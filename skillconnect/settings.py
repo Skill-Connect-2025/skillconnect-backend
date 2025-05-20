@@ -10,7 +10,9 @@ Env.read_env(os.path.join(BASE_DIR, '.env'))
 
 SECRET_KEY = env('SECRET_KEY', default='django-insecure-$nym9i&u#%n=zi#7uz+5r28o62gek*x$#ox2njxf2))wtfo8n7')
 DEBUG = env.bool('DEBUG', default=True)
+
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'api.skillconnect.wisewaytech.com']
+
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -89,7 +91,13 @@ USE_TZ = True
 
 AUTH_USER_MODEL = 'users.User'
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
+# STATICFILES_DIRS = [
+#     os.path.join(BASE_DIR, "static"),  # if you have a 'static' folder in app
+# ]
+
+STATIC_ROOT = os.path.join(BASE_DIR, "static")
+
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
