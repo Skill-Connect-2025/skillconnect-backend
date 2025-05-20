@@ -1,7 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 from django.utils import timezone
-from datetime import datetime
+from datetime import datetime, timedelta
 
 class User(AbstractUser):
     email = models.EmailField(blank=True, null=True, unique=True)
@@ -44,7 +44,7 @@ class Worker(models.Model):
     @property
     def years_of_experience(self):
         if self.join_date:
-            delta = datetime.now(timezone.utc) - self.join_date
+            delta = timezone.now() - self.join_date
             years = delta.days / 365.25 
             return round(years, 2) 
         return 0.0

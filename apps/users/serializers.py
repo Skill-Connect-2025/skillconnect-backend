@@ -5,38 +5,36 @@ from django.db.models import Q
 from django.utils import timezone
 from .models import Client, Worker, VerificationToken, Education, Skill, TargetJob
 from datetime import datetime
+import uuid
+import random
+from django.core.mail import send_mail
+from django.conf import settings
+from twilio.rest import Client as TwilioClient
+from django.contrib.auth import get_user_model
+from django.core.cache import cache
+from datetime import timedelta
+
 
 
 User = get_user_model()
 
 class SelectSignupMethodSerializer(serializers.Serializer):
-    identifier = serializers.CharField(max_length=255)
-    method = serializers.ChoiceField(choices=['email', 'phone'])
+    signup_method = serializers.ChoiceField(choices=['email', 'phone'])
 
     def validate(self, data):
-        identifier = data.get('identifier')
-        method = data.get('method')
-
-        if method == 'email':
-            if '@' not in identifier or '.' not in identifier:
-                raise serializers.ValidationError("Invalid email format.")
-        elif method == 'phone':
-            if not identifier.startswith('+') or not identifier[1:].isdigit():
-                raise serializers.ValidationError("Invalid phone number format. Use + followed by digits.")
-
-        user = User.get_by_identifier(identifier)
-        if user:
-            raise serializers.ValidationError({"identifier": "User with this identifier already exists."})
-
+        signup_method = data.get('signup_method')
+        if signup_method not in ['email', 'phone']:
+            raise serializers.ValidationError("Signup method must be 'email' or 'phone'.")
         return data
 
     def save(self):
-        identifier = self.validated_data['identifier']
-        method = self.validated_data['method']
+        signup_method = self.validated_data['signup_method']
+        # Generate a unique temporary username
+        temp_username = f"temp_{uuid.uuid4().hex[:10]}"
         user = User.objects.create(
-            email=identifier if method == 'email' else None,
-            phone_number=identifier if method == 'phone' else None,
-            signup_method=method
+            username=temp_username,
+            signup_method=signup_method,
+            is_active=False
         )
         return user
 
@@ -45,24 +43,51 @@ class SignupRequestSerializer(serializers.Serializer):
     identifier = serializers.CharField(max_length=255)
 
     def validate(self, data):
+        user_id = data.get('user_id')
         identifier = data.get('identifier')
-        user = User.objects.filter(id=data['user_id']).first()
-        if not user or user.is_verified:
+
+        # Check if user exists and is unverified
+        try:
+            user = User.objects.get(id=user_id, is_active=False)
+        except User.DoesNotExist:
             raise serializers.ValidationError({"error": "User not found or already verified."})
 
-        if user.signup_method == 'email' and user.email != identifier:
-            raise serializers.ValidationError({"identifier": "Does not match the signup identifier."})
-        if user.signup_method == 'phone' and user.phone_number != identifier:
-            raise serializers.ValidationError({"identifier": "Does not match the signup identifier."})
+        # Validate identifier format based on signup_method
+        if user.signup_method == 'email':
+            if '@' not in identifier or '.' not in identifier:
+                raise serializers.ValidationError({"identifier": "Invalid email format."})
+            # Check for duplicate email
+            if User.objects.filter(email=identifier).exists():
+                raise serializers.ValidationError({"identifier": "Email already in use."})
+        elif user.signup_method == 'phone':
+            if not identifier.startswith('+') or not identifier[1:].isdigit():
+                raise serializers.ValidationError({"identifier": "Invalid phone number format. Use + followed by digits."})
+            # Check for duplicate phone
+            if User.objects.filter(phone_number=identifier).exists():
+                raise serializers.ValidationError({"identifier": "Phone number already in use."})
+        else:
+            raise serializers.ValidationError({"error": "Invalid signup method."})
 
+        data['user'] = user
         return data
 
     def save(self):
-        user = User.objects.get(id=self.validated_data['user_id'])
+        user = self.validated_data['user']
         identifier = self.validated_data['identifier']
+
+        # Set identifier on user
+        if user.signup_method == 'email':
+            user.email = identifier
+        else:
+            user.phone_number = identifier
+            user.email = user.email or 'temp@skillconnect.com'
+        user.save()
+
+        # Generate and save verification code
         code = str(random.randint(100000, 999999))
         VerificationToken.objects.create(user=user, code=code, purpose='registration')
 
+        # Send verification code via email or SMS
         if user.signup_method == 'email':
             subject = "SkillConnect Verification Code"
             message = f"Your verification code is: {code}\nThis code expires in 10 minutes."
@@ -82,14 +107,34 @@ class SignupRequestSerializer(serializers.Serializer):
                 to=identifier
             )
 
+        return user
+
 class VerifyAndCompleteSerializer(serializers.Serializer):
     user_id = serializers.IntegerField()
     code = serializers.CharField(max_length=6)
-    username = serializers.CharField(max_length=150)
-    password = serializers.CharField(max_length=128, write_only=True)
+    password = serializers.CharField(
+        max_length=128,
+        write_only=True,
+        min_length=8,
+        error_messages={
+            'min_length': 'Password must be at least 8 characters long.'
+        }
+    )
     role = serializers.ChoiceField(choices=['worker', 'client'])
-    first_name = serializers.CharField(max_length=30)
-    last_name = serializers.CharField(max_length=150)
+    first_name = serializers.CharField(
+        max_length=30,
+        min_length=2,
+        error_messages={
+            'min_length': 'First name must be at least 2 characters long.'
+        }
+    )
+    last_name = serializers.CharField(
+        max_length=150,
+        min_length=2,
+        error_messages={
+            'min_length': 'Last name must be at least 2 characters long.'
+        }
+    )
 
     def validate(self, data):
         user = User.objects.filter(id=data['user_id']).first()
@@ -98,31 +143,67 @@ class VerifyAndCompleteSerializer(serializers.Serializer):
         if user.is_verified:
             raise serializers.ValidationError("User already verified.")
 
+        # Check for expired verification codes
+        VerificationToken.objects.filter(
+            user=user,
+            purpose='registration',
+            expires_at__lt=timezone.now(),
+            is_used=False
+        ).delete()
+
         token = VerificationToken.objects.filter(
-            user=user, code=data['code'], purpose='registration',
-            expires_at__gt=timezone.now(), is_used=False
+            user=user,
+            code=data['code'],
+            purpose='registration',
+            expires_at__gt=timezone.now(),
+            is_used=False
         ).first()
         if not token:
             raise serializers.ValidationError("Invalid or expired code.")
 
-        validate_password(data['password'], user)
+        # Validate password strength
+        try:
+            validate_password(data['password'], user)
+        except Exception as e:
+            raise serializers.ValidationError({"password": list(e.messages)})
+
+        # Validate name format
+        if not data['first_name'].replace(' ', '').isalpha():
+            raise serializers.ValidationError({"first_name": "First name should only contain letters."})
+        if not data['last_name'].replace(' ', '').isalpha():
+            raise serializers.ValidationError({"last_name": "Last name should only contain letters."})
+
         return data
 
     def save(self):
         user = User.objects.get(id=self.validated_data['user_id'])
-        user.username = self.validated_data['username']
         user.set_password(self.validated_data['password'])
-        user.first_name = self.validated_data['first_name']
-        user.last_name = self.validated_data['last_name']
+        user.first_name = self.validated_data['first_name'].strip()
+        user.last_name = self.validated_data['last_name'].strip()
+        
+        # Generate username from first_name and last_name
+        base_username = f"{user.first_name.lower()}.{user.last_name.lower()}"
+        username = base_username
+        counter = 1
+        # Check if username exists and append number if it does
+        while User.objects.filter(username=username).exists():
+            username = f"{base_username}{counter}"
+            counter += 1
+        user.username = username
         user.is_verified = True
+        user.is_active = True  # Ensure user is active after verification
         user.save()
 
+        # Mark token as used
         token = VerificationToken.objects.get(
-            user=user, code=self.validated_data['code'], purpose='registration'
+            user=user,
+            code=self.validated_data['code'],
+            purpose='registration'
         )
         token.is_used = True
         token.save()
 
+        # Create role-specific profile
         role = self.validated_data['role']
         if role == 'worker':
             Worker.objects.create(user=user, has_experience=False)
@@ -138,16 +219,40 @@ class LoginSerializer(serializers.Serializer):
     def validate(self, data):
         identifier = data.get('identifier')
         password = data.get('password')
+
+        # Check for rate limiting
+        cache_key = f'login_attempts_{identifier}'
+        attempts = cache.get(cache_key, 0)
+        
+        if attempts >= 5:  # Maximum 5 attempts
+            raise serializers.ValidationError(
+                "Too many login attempts. Please try again in 15 minutes."
+            )
+
         user = User.get_by_identifier(identifier)
         if user and user.check_password(password):
             if not user.is_verified:
                 raise serializers.ValidationError("User is not verified.")
+            if not user.is_active:
+                raise serializers.ValidationError("User account is disabled.")
+            
+            # Reset attempts on successful login
+            cache.delete(cache_key)
             return data
+        
+        # Increment failed attempts
+        cache.set(cache_key, attempts + 1, 900)  # 15 minutes timeout
         raise serializers.ValidationError("Invalid credentials.")
 
     def save(self):
         identifier = self.validated_data['identifier']
-        return User.get_by_identifier(identifier)
+        user = User.get_by_identifier(identifier)
+        
+        # Update last login
+        user.last_login = timezone.now()
+        user.save(update_fields=['last_login'])
+        
+        return user
 
 class PasswordResetRequestSerializer(serializers.Serializer):
     identifier = serializers.CharField(max_length=255)
