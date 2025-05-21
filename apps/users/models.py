@@ -40,6 +40,7 @@ class Worker(models.Model):
     gender = models.CharField(max_length=10, blank=True, null=True)
     has_experience = models.BooleanField(default=False)
     join_date = models.DateTimeField(default=timezone.now, null=True) 
+    last_activity = models.DateTimeField(null=True, blank=True)
 
     @property
     def years_of_experience(self):

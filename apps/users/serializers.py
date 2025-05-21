@@ -13,8 +13,8 @@ from twilio.rest import Client as TwilioClient
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from datetime import timedelta
-
-
+from apps.jobs.models import Job, JobRequest, Feedback
+from apps.jobs.serializers import FeedbackSerializer
 
 User = get_user_model()
 
@@ -325,7 +325,6 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         token.save()
 
 
-
 class UserSerializer(serializers.ModelSerializer):
     role = serializers.SerializerMethodField()
     profile_pic = serializers.SerializerMethodField()
@@ -334,19 +333,23 @@ class UserSerializer(serializers.ModelSerializer):
     nationality = serializers.SerializerMethodField()
     gender = serializers.SerializerMethodField()
     has_experience = serializers.SerializerMethodField()
-    years_of_experience = serializers.SerializerMethodField() 
+    years_of_experience = serializers.SerializerMethodField()
     educations = serializers.SerializerMethodField()
     skills = serializers.SerializerMethodField()
     target_jobs = serializers.SerializerMethodField()
+    email = serializers.SerializerMethodField()
+    phone_number = serializers.SerializerMethodField()
+    feedback = serializers.SerializerMethodField()
+    average_rating = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = [
             'id', 'username', 'first_name', 'last_name',
             'role', 'profile_pic', 'location', 'birthdate', 'nationality', 'gender',
-            'has_experience', 'years_of_experience', 'educations', 'skills', 'target_jobs'
+            'has_experience', 'years_of_experience', 'educations', 'skills', 'target_jobs',
+            'email', 'phone_number', 'feedback', 'average_rating'
         ]
-        
 
     def get_role(self, obj):
         if obj.is_client:
@@ -409,6 +412,54 @@ class UserSerializer(serializers.ModelSerializer):
             return TargetJobSerializer(obj.worker.target_jobs.all(), many=True).data
         return []
 
+    def get_email(self, obj):
+        request = self.context.get('request')
+        if not request or not hasattr(request, 'user') or not request.user.is_authenticated:
+            return None
+        # Reveal email for workers if requester is a client with an accepted job request
+        if obj.is_worker and request.user.is_client:
+            job = Job.objects.filter(
+                client=request.user,
+                assigned_worker=obj.worker,
+                status__in=['in_progress', 'completed', 'pending_payment']
+            ).first()
+            if job:
+                return obj.email
+        
+        if obj == request.user:
+            return obj.email
+        return None
+
+    def get_phone_number(self, obj):
+        request = self.context.get('request')
+        if not request or not hasattr(request, 'user') or not request.user.is_authenticated:
+            return None
+        
+        if obj.is_worker and request.user.is_client:
+            job = Job.objects.filter(
+                client=request.user,
+                assigned_worker=obj.worker,
+                status__in=['in_progress', 'completed', 'pending_payment']
+            ).first()
+            if job:
+                return obj.phone_number
+        if obj == request.user:
+            return obj.phone_number
+        return None
+    
+    def get_feedback(self, obj):
+        if obj.is_worker:
+            return FeedbackSerializer(obj.worker.feedback.all(), many=True).data
+        return []
+
+    def get_average_rating(self, obj):
+        if obj.is_worker:
+            feedback = obj.worker.feedback.all()
+            if feedback.exists():
+                return round(sum(f.rating for f in feedback) / feedback.count(), 1)
+            return 0.0
+        return None
+
 class ClientProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = Client
@@ -443,8 +494,22 @@ class WorkerProfileSerializer(serializers.Serializer):
     skills = SkillSerializer(many=True, required=True)
     target_jobs = TargetJobSerializer(many=True, required=True)
     years_of_experience = serializers.FloatField(read_only=True)
+    last_activity = serializers.DateTimeField(read_only=True)
+    feedback = serializers.SerializerMethodField(read_only=True)
+    average_rating = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         ref_name = 'UsersWorkerProfile' 
+    
+    def get_feedback(self, obj):
+        return FeedbackSerializer(obj.feedback.all(), many=True).data
+
+    def get_average_rating(self, obj):
+        feedback = obj.feedback.all()
+        if feedback.exists():
+            return round(sum(f.rating for f in feedback) / feedback.count(), 1)
+        return 0.0
+    
 
     def validate(self, data):
         try:

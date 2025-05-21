@@ -143,6 +143,10 @@ class LoginView(APIView):
         if serializer.is_valid():
             user = serializer.save()
             token, created = Token.objects.get_or_create(user=user)
+            # Update last_activity for worker
+            if hasattr(user, 'worker'):
+                user.worker.last_activity = timezone.now()
+                user.worker.save()
             return Response({"token": token.key}, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -255,6 +259,8 @@ class WorkerProfileView(APIView):
         )
         if serializer.is_valid():
             serializer.save()
+            worker.last_activity = timezone.now()
+            worker.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 

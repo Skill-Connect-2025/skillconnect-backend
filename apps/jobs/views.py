@@ -5,10 +5,16 @@ from rest_framework.permissions import IsAuthenticated
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 from .models import Job, JobApplication, JobRequest
-from .serializers import JobSerializer, JobApplicationSerializer, JobRequestSerializer, PaymentRequestSerializer
+from .serializers import JobSerializer, JobApplicationSerializer, JobRequestSerializer, PaymentRequestSerializer, FeedbackSerializer
 from core.utils import IsClient, IsWorker
 from django.core.mail import send_mail
 from django.conf import settings
+from twilio.base.exceptions import TwilioRestException
+from twilio.rest import Client as TwilioClient
+import logging
+
+# Set up logging for notification failures
+logger = logging.getLogger(__name__)
 
 class JobCreateView(APIView):
     permission_classes = [IsAuthenticated, IsClient]
@@ -189,6 +195,7 @@ class JobApplicationsListView(APIView):
         applications = job.applications.all()
         serializer = JobApplicationSerializer(applications, many=True)
         return Response(serializer.data)
+    
 
 class JobRequestView(APIView):
     permission_classes = [IsAuthenticated, IsClient]
@@ -220,14 +227,37 @@ class JobRequestView(APIView):
         serializer = JobRequestSerializer(data=data, context={'request': request})
         if serializer.is_valid():
             request_obj = serializer.save()
+            worker = request_obj.application.worker.user
             # Send email notification to worker
-            send_mail(
-                subject=f"New Request for Job: {job.title}",
-                message=f"Client {request.user.username} sent you a request for job: {job.title}. Log in to respond.",
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[request_obj.application.worker.user.email],
-                fail_silently=True,
+            email_subject = f"New Request for Job: {job.title}"
+            email_message = (
+                f"Dear {worker.first_name},\n\n"
+                f"Client {request.user.username} has sent you a request for the job: {job.title}.\n"
+                f"Please log in to SkillConnect to respond.\n\n"
+                f"Best regards,\nSkillConnect Team"
             )
+            try:
+                send_mail(
+                    subject=email_subject,
+                    message=email_message,
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[worker.email],
+                    fail_silently=False,
+                )
+            except Exception as e:
+                logger.error(f"Failed to send job request email to {worker.email}: {str(e)}")
+            # Send SMS notification to worker (if phone number exists)
+            if worker.phone_number:
+                sms_message = f"New request for job: {job.title} from {request.user.username}. Log in to respond."
+                try:
+                    twilio_client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+                    twilio_client.messages.create(
+                        body=sms_message,
+                        from_=settings.TWILIO_PHONE_NUMBER,
+                        to=worker.phone_number
+                    )
+                except TwilioRestException as e:
+                    logger.error(f"Failed to send job request SMS to {worker.phone_number}: {str(e)}")
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -257,88 +287,86 @@ class JobRequestResponseView(APIView):
             job_request = JobRequest.objects.get(id=request_id, application__job=job, application__worker=request.user.worker)
         except (Job.DoesNotExist, JobRequest.DoesNotExist):
             return Response({"error": "Job or request not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
-        if job_request.status != 'pending':
-            return Response({"error": "Request already processed"}, status=status.HTTP_400_BAD_REQUEST)
-        status = request.data.get('status')
-        if status not in ['accepted', 'rejected']:
-            return Response({"error": "Invalid status"}, status=status.HTTP_400_BAD_REQUEST)
-        job_request.status = status
-        job_request.save()
-        if status == 'accepted':
-            job_request.application.status = 'accepted'
-            job_request.application.save()
-            job.assigned_worker = request.user.worker
-            job.status = 'in_progress'
-            job.save()
-            # Notify client with worker contact details
-            send_mail(
-                subject=f"Worker Accepted Request for Job: {job.title}",
-                message=f"Worker {request.user.username} accepted your request. Contact them at {request.user.email} or {request.user.phone_number}.",
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[job.client.email],
-                fail_silently=True,
-            )
-            # Notify worker of assignment
-            send_mail(
-                subject=f"Assigned to Job: {job.title}",
-                message=f"You have been assigned to job: {job.title}. Contact the client at {job.client.email}.",
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[request.user.email],
-                fail_silently=True,
-            )
-        else:
-            job_request.application.status = 'rejected'
-            job_request.application.save()
-        serializer = JobRequestSerializer(job_request)
-        return Response(serializer.data)
-    permission_classes = [IsAuthenticated, IsWorker]
-
-    @swagger_auto_schema(
-        operation_description="Accept or reject a job request.",
-        request_body=openapi.Schema(
-            type=openapi.TYPE_OBJECT,
-            required=['status'],
-            properties={
-                'status': openapi.Schema(type=openapi.TYPE_STRING, enum=['accepted', 'rejected'])
-            },
-        ),
-        responses={
-            200: JobRequestSerializer,
-            400: 'Bad Request',
-            401: 'Unauthorized',
-            403: 'Forbidden',
-            404: 'Not Found'
-        }
-    )
-    def post(self, request, pk, request_id):
-        try:
-            job = Job.objects.get(pk=pk)
-            job_request = JobRequest.objects.get(id=request_id, application__job=job, application__worker=request.user.worker)
-        except (Job.DoesNotExist, JobRequest.DoesNotExist):
-            return Response({"error": "Job or request not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
-        if job_request.status != 'pending':
-            return Response({"error": "Request already processed"}, status=status.HTTP_400_BAD_REQUEST)
-        status = request.data.get('status')
-        if status not in ['accepted', 'rejected']:
-            return Response({"error": "Invalid status"}, status=status.HTTP_400_BAD_REQUEST)
-        job_request.status = status
-        job_request.save()
-        if status == 'accepted':
-            job_request.application.status = 'accepted'
-            job_request.application.save()
-            # Notify client with worker contact details
-            send_mail(
-                subject=f"Worker Accepted Request for Job: {job.title}",
-                message=f"Worker {request.user.username} accepted your request. Contact them at {request.user.email} or {request.user.phone_number}.",
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[job.client.email],
-                fail_silently=True,
-            )
-        else:
-            job_request.application.status = 'rejected'
-            job_request.application.save()
-        serializer = JobRequestSerializer(job_request)
-        return Response(serializer.data)
+        serializer = JobRequestResponseSerializer(data=request.data, context={'job_request': job_request})
+        if serializer.is_valid():
+            status = serializer.validated_data['status']
+            job_request.status = status
+            job_request.save()
+            if status == 'accepted':
+                job_request.application.status = 'accepted'
+                job_request.application.save()
+                job.assigned_worker = request.user.worker
+                job.status = 'in_progress'
+                job.save()
+                # Notify client with worker contact details
+                email_subject = f"Worker Accepted Request for Job: {job.title}"
+                email_message = (
+                    f"Dear {job.client.first_name},\n\n"
+                    f"Worker {request.user.first_name} {request.user.last_name} has accepted your request for job: {job.title}.\n"
+                    f"Contact them at:\nEmail: {request.user.email}\nPhone: {request.user.phone_number}\n\n"
+                    f"Best regards,\nSkillConnect Team"
+                )
+                try:
+                    send_mail(
+                        subject=email_subject,
+                        message=email_message,
+                        from_email=settings.DEFAULT_FROM_EMAIL,
+                        recipient_list=[job.client.email],
+                        fail_silently=False,
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send acceptance email to {job.client.email}: {str(e)}")
+                # Send SMS to client (if phone number exists)
+                if job.client.phone_number:
+                    sms_message = (
+                        f"Worker {request.user.first_name} accepted job: {job.title}. "
+                        f"Contact: {request.user.email}, {request.user.phone_number}"
+                    )
+                    try:
+                        twilio_client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+                        twilio_client.messages.create(
+                            body=sms_message,
+                            from_=settings.TWILIO_PHONE_NUMBER,
+                            to=job.client.phone_number
+                        )
+                    except TwilioRestException as e:
+                        logger.error(f"Failed to send acceptance SMS to {job.client.phone_number}: {str(e)}")
+                # Notify worker of assignment
+                email_subject = f"Assigned to Job: {job.title}"
+                email_message = (
+                    f"Dear {request.user.first_name},\n\n"
+                    f"You have been assigned to job: {job.title}.\n"
+                    f"Contact the client at:\nEmail: {job.client.email}\nPhone: {job.client.phone_number or 'Not provided'}\n\n"
+                    f"Best regards,\nSkillConnect Team"
+                )
+                try:
+                    send_mail(
+                        subject=email_subject,
+                        message=email_message,
+                        from_email=settings.DEFAULT_FROM_EMAIL,
+                        recipient_list=[request.user.email],
+                        fail_silently=False,
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send assignment email to {request.user.email}: {str(e)}")
+                # Send SMS to worker (if phone number exists)
+                if request.user.phone_number:
+                    sms_message = f"Assigned to job: {job.title}. Contact client: {job.client.email}"
+                    try:
+                        twilio_client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+                        twilio_client.messages.create(
+                            body=sms_message,
+                            from_=settings.TWILIO_PHONE_NUMBER,
+                            to=request.user.phone_number
+                        )
+                    except TwilioRestException as e:
+                        logger.error(f"Failed to send assignment SMS to {request.user.phone_number}: {str(e)}")
+            else:
+                job_request.application.status = 'rejected'
+                job_request.application.save()
+            serializer = JobRequestSerializer(job_request)
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class JobStatusUpdateView(APIView):
     permission_classes = [IsAuthenticated, IsClient]
@@ -365,23 +393,43 @@ class JobStatusUpdateView(APIView):
             job = Job.objects.get(pk=pk, client=request.user)
         except Job.DoesNotExist:
             return Response({"error": "Job not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
-        status = request.data.get('status')
-        if status != 'completed':
-            return Response({"error": "Invalid status. Only 'completed' is allowed."}, status=status.HTTP_400_BAD_REQUEST)
-        if job.status != 'in_progress':
-            return Response({"error": "Job must be in progress to mark as completed."}, status=status.HTTP_400_BAD_REQUEST)
-        job.status = status
-        job.save()
-        # Notify worker
-        send_mail(
-            subject=f"Job Completed: {job.title}",
-            message=f"The client marked job '{job.title}' as completed. You can now request payment.",
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[job.assigned_worker.user.email],
-            fail_silently=True,
-        )
-        serializer = JobSerializer(job)
-        return Response(serializer.data)
+        serializer = JobStatusUpdateSerializer(data=request.data, context={'job': job})
+        if serializer.is_valid():
+            job.status = serializer.validated_data['status']
+            job.save()
+            # Notify worker
+            email_subject = f"Job Completed: {job.title}"
+            email_message = (
+                f"Dear {job.assigned_worker.user.first_name},\n\n"
+                f"The client has marked job '{job.title}' as completed.\n"
+                f"You can now request payment via SkillConnect.\n\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            try:
+                send_mail(
+                    subject=email_subject,
+                    message=email_message,
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[job.assigned_worker.user.email],
+                    fail_silently=False,
+                )
+            except Exception as e:
+                logger.error(f"Failed to send completion email to {job.assigned_worker.user.email}: {str(e)}")
+            # Send SMS to worker (if phone number exists)
+            if job.assigned_worker.user.phone_number:
+                sms_message = f"Job {job.title} marked as completed. You can now request payment."
+                try:
+                    twilio_client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+                    twilio_client.messages.create(
+                        body=sms_message,
+                        from_=settings.TWILIO_PHONE_NUMBER,
+                        to=job.assigned_worker.user.phone_number
+                    )
+                except TwilioRestException as e:
+                    logger.error(f"Failed to send completion SMS to {job.assigned_worker.user.phone_number}: {str(e)}")
+            serializer = JobSerializer(job)
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class JobPaymentRequestView(APIView):
     permission_classes = [IsAuthenticated, IsWorker]
@@ -416,12 +464,104 @@ class JobPaymentRequestView(APIView):
             job.status = 'pending_payment'
             job.save()
             # Notify client
-            send_mail(
-                subject=f"Payment Request for Job: {job.title}",
-                message=f"Worker {request.user.username} requested payment for job: {job.title}. Contact them at {request.user.email} or {request.user.phone_number}.",
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[job.client.email],
-                fail_silently=True,
+            email_subject = f"Payment Request for Job: {job.title}"
+            email_message = (
+                f"Dear {job.client.first_name},\n\n"
+                f"Worker {request.user.first_name} {request.user.last_name} has requested payment for job: {job.title}.\n"
+                f"Contact them at:\nEmail: {request.user.email}\nPhone: {request.user.phone_number}\n"
+                f"Please process the payment via SkillConnect.\n\n"
+                f"Best regards,\nSkillConnect Team"
             )
+            try:
+                send_mail(
+                    subject=email_subject,
+                    message=email_message,
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[job.client.email],
+                    fail_silently=False,
+                )
+            except Exception as e:
+                logger.error(f"Failed to send payment request email to {job.client.email}: {str(e)}")
+            # Send SMS to client (if phone number exists)
+            if job.client.phone_number:
+                sms_message = (
+                    f"Payment request for job: {job.title} by {request.user.first_name}. "
+                    f"Contact: {request.user.email}, {request.user.phone_number}"
+                )
+                try:
+                    twilio_client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+                    twilio_client.messages.create(
+                        body=sms_message,
+                        from_=settings.TWILIO_PHONE_NUMBER,
+                        to=job.client.phone_number
+                    )
+                except TwilioRestException as e:
+                    logger.error(f"Failed to send payment request SMS to {job.client.phone_number}: {str(e)}")
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class JobFeedbackView(APIView):
+    permission_classes = [IsAuthenticated, IsClient]
+
+    @swagger_auto_schema(
+        operation_description="Submit feedback for a completed job.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['rating'],
+            properties={
+                'rating': openapi.Schema(type=openapi.TYPE_INTEGER, minimum=1, maximum=5, description='Rating from 1 to 5'),
+                'review': openapi.Schema(type=openapi.TYPE_STRING, description='Optional review text', nullable=True),
+            },
+        ),
+        responses={
+            201: FeedbackSerializer,
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def post(self, request, pk):
+        try:
+            job = Job.objects.get(pk=pk, client=request.user)
+        except Job.DoesNotExist:
+            return Response({"error": "Job not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
+        data = request.data.copy()
+        data['job'] = job.id
+        data['worker'] = job.assigned_worker.id
+        data['client'] = request.user.id
+        serializer = FeedbackSerializer(data=data, context={'request': request})
+        if serializer.is_valid():
+            feedback = serializer.save()
+            # Notify worker
+            email_subject = f"New Feedback for Job: {job.title}"
+            email_message = (
+                f"Dear {job.assigned_worker.user.first_name},\n\n"
+                f"Client {request.user.first_name} has submitted feedback for job: {job.title}.\n"
+                f"Rating: {feedback.rating}/5\n"
+                f"Review: {feedback.review or 'No review provided'}\n\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            try:
+                send_mail(
+                    subject=email_subject,
+                    message=email_message,
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[job.assigned_worker.user.email],
+                    fail_silently=False,
+                )
+            except Exception as e:
+                logger.error(f"Failed to send feedback email to {job.assigned_worker.user.email}: {str(e)}")
+            if job.assigned_worker.user.phone_number:
+                sms_message = f"New feedback for job: {job.title}. Rating: {feedback.rating}/5."
+                try:
+                    twilio_client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+                    twilio_client.messages.create(
+                        body=sms_message,
+                        from_=settings.TWILIO_PHONE_NUMBER,
+                        to=job.assigned_worker.user.phone_number
+                    )
+                except TwilioRestException as e:
+                    logger.error(f"Failed to send feedback SMS to {job.assigned_worker.user.phone_number}: {str(e)}")
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

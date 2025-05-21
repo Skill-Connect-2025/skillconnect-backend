@@ -65,3 +65,17 @@ class PaymentRequest(models.Model):
 
     def __str__(self):
         return f"Payment request for {self.job.title} by {self.worker.user.username}"
+
+class Feedback(models.Model):
+    job = models.OneToOneField(Job, on_delete=models.CASCADE, related_name='feedback')
+    worker = models.ForeignKey(Worker, on_delete=models.CASCADE, related_name='feedback')
+    client = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='feedback')
+    rating = models.IntegerField(choices=[(i, i) for i in range(1, 6)])  # 1 to 5 stars
+    review = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('job', 'worker', 'client')
+
+    def __str__(self):
+        return f"Feedback for {self.worker.user.username} on {self.job.title} ({self.rating}/5)"
