@@ -1,4 +1,5 @@
 from django.urls import path
+from rest_framework.authtoken.views import obtain_auth_token
 from .views import (
     AuthLoginView, AuthSignupInitiateView, AuthSignupVerifyView,
     AuthSignupResendCodeView, AuthSignupCompleteView, AuthPasswordResetView,
@@ -23,4 +24,5 @@ urlpatterns = [
     path('users/profile/client/', UserProfileClientView.as_view(), name='user_profile_client'),
     path('users/profile/worker/', UserProfileWorkerView.as_view(), name='user_profile_worker'),
     path('users/my-applications/', UserApplicationsView.as_view(), name='user_my_applications'),
+   
 ]

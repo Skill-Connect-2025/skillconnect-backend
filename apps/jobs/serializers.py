@@ -1,10 +1,12 @@
 from rest_framework import serializers
-from .models import Job, JobImage, Category, JobApplication, JobRequest, Feedback, PaymentRequest
+from .models import Job, JobImage, Category, JobApplication, JobRequest, Feedback, PaymentRequest, Payment
 from apps.users.models import Worker
 from .models import PaymentRequest
 from apps.users.serializers import UserSerializer
 from core.constants import JOB_STATUS_CHOICES, PAYMENT_METHOD_CHOICES
 from .feedback_serializers import FeedbackSerializer
+import uuid
+
 
 class CategorySerializer(serializers.ModelSerializer):
     class Meta:
@@ -211,3 +213,32 @@ class JobSerializer(serializers.ModelSerializer):
                 if image:
                     JobImage.objects.create(job=instance, image=image)
         return instance
+
+class PaymentConfirmSerializer(serializers.ModelSerializer):
+    amount = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True)
+    tx_ref = serializers.CharField(max_length=100, required=False, read_only=True)
+
+    class Meta:
+        model = Payment
+        fields = ['id', 'job', 'client', 'worker', 'payment_method', 'amount', 'tx_ref', 'transaction_id', 'status', 'created_at']
+        read_only_fields = ['client', 'worker', 'payment_method', 'tx_ref', 'transaction_id', 'status', 'created_at']
+
+    def validate(self, data):
+        job = data['job']
+        client = self.context['request'].user
+        if job.status != 'pending_payment':
+            raise serializers.ValidationError("Cannot confirm payment for a job not pending payment.")
+        if job.client != client:
+            raise serializers.ValidationError("Only the job's client can confirm payment.")
+        if Payment.objects.filter(job=job).exists():
+            raise serializers.ValidationError("Payment already confirmed for this job.")
+        if data.get('payment_method', job.payment_method) != job.payment_method:
+            raise serializers.ValidationError("Payment method must match the job's payment method.")
+        if job.payment_method != 'cash' and not data.get('amount'):
+            raise serializers.ValidationError("Amount is required for non-cash payments.")
+        return data
+
+    def create(self, validated_data):
+        job = validated_data['job']
+        validated_data['tx_ref'] = f"job-{job.id}-{uuid.uuid4().hex[:10]}"
+        return super().create(validated_data)
