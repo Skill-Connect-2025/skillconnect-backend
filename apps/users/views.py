@@ -21,7 +21,34 @@ from twilio.rest import Client as TwilioClient
 from django.conf import settings
 import random
 
-class SelectSignupMethodView(APIView):
+User = get_user_model()
+
+class AuthLoginView(APIView):
+    permission_classes = []
+
+    @swagger_auto_schema(
+        request_body=LoginSerializer,
+        responses={
+            200: openapi.Response('Login successful', openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                properties={'token': openapi.Schema(type=openapi.TYPE_STRING)}
+            )),
+            400: 'Bad Request'
+        }
+    )
+    def post(self, request):
+        serializer = LoginSerializer(data=request.data)
+        if serializer.is_valid():
+            user = serializer.save()
+            token, created = Token.objects.get_or_create(user=user)
+            # Update last_activity for worker
+            if hasattr(user, 'worker'):
+                user.worker.last_activity = timezone.now()
+                user.worker.save()
+            return Response({"token": token.key}, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class AuthSignupInitiateView(APIView):
     permission_classes = []
 
     @swagger_auto_schema(
@@ -44,24 +71,28 @@ class SelectSignupMethodView(APIView):
             return Response({"user_id": user.id, "message": "Signup method selected"}, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-class SignupRequestView(APIView):
+class AuthSignupVerifyView(APIView):
     permission_classes = []
 
     @swagger_auto_schema(
-        request_body=SignupRequestSerializer,
+        request_body=VerifyAndCompleteSerializer,
         responses={
-            200: openapi.Response('Verification code sent'),
+            201: openapi.Response('Registration completed', UserSerializer),
             400: 'Bad Request'
         }
     )
     def post(self, request):
-        serializer = SignupRequestSerializer(data=request.data)
+        serializer = VerifyAndCompleteSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
-            return Response({"message": "Verification code sent"}, status=status.HTTP_200_OK)
+            user = serializer.save()
+            token, created = Token.objects.get_or_create(user=user)
+            return Response(
+                {"token": token.key, "user": UserSerializer(user).data},
+                status=status.HTTP_201_CREATED
+            )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-class GetCodeAgainView(APIView):
+class AuthSignupResendCodeView(APIView):
     permission_classes = []
 
     @swagger_auto_schema(
@@ -104,7 +135,7 @@ class GetCodeAgainView(APIView):
             return Response({"message": "Verification code resent"}, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-class VerifyAndCompleteView(APIView):
+class AuthSignupCompleteView(APIView):
     permission_classes = []
 
     @swagger_auto_schema(
@@ -125,32 +156,7 @@ class VerifyAndCompleteView(APIView):
             )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-class LoginView(APIView):
-    permission_classes = []
-
-    @swagger_auto_schema(
-        request_body=LoginSerializer,
-        responses={
-            200: openapi.Response('Login successful', openapi.Schema(
-                type=openapi.TYPE_OBJECT,
-                properties={'token': openapi.Schema(type=openapi.TYPE_STRING)}
-            )),
-            400: 'Bad Request'
-        }
-    )
-    def post(self, request):
-        serializer = LoginSerializer(data=request.data)
-        if serializer.is_valid():
-            user = serializer.save()
-            token, created = Token.objects.get_or_create(user=user)
-            # Update last_activity for worker
-            if hasattr(user, 'worker'):
-                user.worker.last_activity = timezone.now()
-                user.worker.save()
-            return Response({"token": token.key}, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-class PasswordResetRequestView(APIView):
+class AuthPasswordResetView(APIView):
     permission_classes = []
 
     @swagger_auto_schema(
@@ -167,7 +173,7 @@ class PasswordResetRequestView(APIView):
             return Response({"message": "Password reset code sent"}, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-class PasswordResetConfirmView(APIView):
+class AuthPasswordResetConfirmView(APIView):
     permission_classes = []
 
     @swagger_auto_schema(
@@ -184,7 +190,21 @@ class PasswordResetConfirmView(APIView):
             return Response({"message": "Password reset successful"}, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-class ClientProfileView(APIView):
+class UserProfileView(APIView):
+    permission_classes = [permissions.IsAuthenticated, RoleBasedPermission]
+    required_role = None
+
+    @swagger_auto_schema(
+        responses={
+            200: UserSerializer,
+            401: 'Unauthorized'
+        }
+    )
+    def get(self, request):
+        serializer = UserSerializer(request.user)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+class UserProfileClientView(APIView):
     permission_classes = [permissions.IsAuthenticated, RoleBasedPermission]
     required_role = 'client'
 
@@ -206,21 +226,7 @@ class ClientProfileView(APIView):
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-class ProfileView(APIView):
-    permission_classes = [permissions.IsAuthenticated, RoleBasedPermission]
-    required_role = None
-
-    @swagger_auto_schema(
-        responses={
-            200: UserSerializer,
-            401: 'Unauthorized'
-        }
-    )
-    def get(self, request):
-        serializer = UserSerializer(request.user)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-class WorkerProfileView(APIView):
+class UserProfileWorkerView(APIView):
     permission_classes = [permissions.IsAuthenticated, RoleBasedPermission]
     required_role = 'worker'
 
@@ -263,7 +269,6 @@ class WorkerProfileView(APIView):
             worker.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 
 class UserApplicationsView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsWorker]

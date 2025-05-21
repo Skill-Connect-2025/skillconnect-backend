@@ -4,8 +4,12 @@ from rest_framework import status, generics
 from rest_framework.permissions import IsAuthenticated
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
-from .models import Job, JobApplication, JobRequest
-from .serializers import JobSerializer, JobApplicationSerializer, JobRequestSerializer, PaymentRequestSerializer, FeedbackSerializer
+from .models import Job, JobApplication, JobRequest, Feedback, PaymentRequest
+from .serializers import (
+    JobSerializer, JobApplicationSerializer, JobRequestSerializer,
+    PaymentRequestSerializer, FeedbackSerializer, JobRequestResponseSerializer,
+    JobStatusUpdateSerializer
+)
 from core.utils import IsClient, IsWorker
 from django.core.mail import send_mail
 from django.conf import settings
@@ -49,7 +53,7 @@ class JobCreateView(APIView):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-class JobListView(generics.ListAPIView):
+class JobListView(APIView):
     serializer_class = JobSerializer
     permission_classes = [IsAuthenticated, IsClient]
 
@@ -60,7 +64,7 @@ class JobListView(generics.ListAPIView):
     def get_queryset(self):
         return Job.objects.filter(client=self.request.user)
 
-class JobDetailView(generics.RetrieveAPIView):
+class JobDetailView(APIView):
     queryset = Job.objects.all()
     serializer_class = JobSerializer
     permission_classes = [IsAuthenticated, IsClient]
@@ -565,3 +569,24 @@ class JobFeedbackView(APIView):
                     logger.error(f"Failed to send feedback SMS to {job.assigned_worker.user.phone_number}: {str(e)}")
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class UserApplicationsView(APIView):
+    permission_classes = [IsAuthenticated, IsClient]
+
+    @swagger_auto_schema(
+        operation_description="List all applications for a job (client must own the job).",
+        responses={
+            200: JobApplicationSerializer(many=True),
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def get(self, request, pk):
+        try:
+            job = Job.objects.get(pk=pk, client=request.user)
+        except Job.DoesNotExist:
+            return Response({"error": "Job not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
+        applications = job.applications.all()
+        serializer = JobApplicationSerializer(applications, many=True)
+        return Response(serializer.data)

@@ -152,30 +152,44 @@ class PaymentRequestSerializer(serializers.ModelSerializer):
 
 
 class JobSerializer(serializers.ModelSerializer):
+    # Read-only fields
     category = CategorySerializer(read_only=True)
+    images = JobImageSerializer(many=True, read_only=True)
+    applications = JobApplicationSerializer(many=True, read_only=True)
+    assigned_worker = WorkerProfileSerializer(read_only=True)
+    status = serializers.ChoiceField(choices=JOB_STATUS_CHOICES, read_only=True)
+    
+    # Write-only fields
     category_id = serializers.PrimaryKeyRelatedField(
         queryset=Category.objects.all(), source='category', write_only=True
     )
-    images = JobImageSerializer(many=True, read_only=True)
     uploaded_images = serializers.ListField(
-        child=serializers.ImageField(allow_empty_file=True), 
-        write_only=True, 
-        required=False, 
-        allow_null=True, 
+        child=serializers.ImageField(allow_empty_file=True),
+        write_only=True,
+        required=False,
+        allow_null=True,
         default=[]
     )
+    
+    # Regular fields
     payment_method = serializers.ChoiceField(choices=PAYMENT_METHOD_CHOICES)
-    status = serializers.ChoiceField(choices=JOB_STATUS_CHOICES, read_only=True)
-    applications = JobApplicationSerializer(many=True, read_only=True)
-    assigned_worker = WorkerProfileSerializer(read_only=True)
 
     class Meta:
         model = Job
         fields = [
-            'id', 'title', 'location', 'skills', 'description', 'category',
-            'category_id', 'payment_method', 'status', 'created_at', 'updated_at',
-            'images', 'uploaded_images', 'applications', 'assigned_worker', 'client'
+            'id', 'title', 'location', 'skills', 'description', 'client',
+            'created_at', 'updated_at', 'category', 'category_id', 'images',
+            'uploaded_images', 'payment_method', 'status', 'applications',
+            'assigned_worker'
         ]
+        read_only_fields = [
+            'id', 'client', 'status', 'created_at', 'updated_at',
+            'images', 'applications', 'assigned_worker'
+        ]
+        extra_kwargs = {
+            'category_id': {'write_only': True},
+            'uploaded_images': {'write_only': True}
+        }
 
     def create(self, validated_data):
         uploaded_images = validated_data.pop('uploaded_images', [])
@@ -197,22 +211,3 @@ class JobSerializer(serializers.ModelSerializer):
                 if image:
                     JobImage.objects.create(job=instance, image=image)
         return instance
-
-
-    class Meta:
-        model = Feedback
-        fields = ['id', 'job', 'worker', 'client', 'rating', 'review', 'created_at']
-        read_only_fields = ['worker', 'client', 'created_at']
-
-    def validate(self, data):
-        job = data['job']
-        client = self.context['request'].user
-    
-        if job.status != 'completed':
-            raise serializers.ValidationError("Cannot submit feedback for a non-completed job.")
-        
-        if job.client != client:
-            raise serializers.ValidationError("Only the job's client can submit feedback.")
-        if Feedback.objects.filter(job=job).exists():
-            raise serializers.ValidationError("Feedback already submitted for this job.")
-        return data
