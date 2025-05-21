@@ -14,7 +14,7 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from datetime import timedelta
 from apps.jobs.models import Job, JobRequest, Feedback
-from apps.jobs.serializers import FeedbackSerializer
+from apps.jobs.feedback_serializers import FeedbackSerializer
 
 User = get_user_model()
 

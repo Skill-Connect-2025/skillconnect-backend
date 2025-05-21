@@ -4,6 +4,7 @@ from apps.users.models import Worker
 from .models import PaymentRequest
 from apps.users.serializers import UserSerializer
 from core.constants import JOB_STATUS_CHOICES, PAYMENT_METHOD_CHOICES
+from .feedback_serializers import FeedbackSerializer
 
 class CategorySerializer(serializers.ModelSerializer):
     class Meta:
@@ -173,7 +174,7 @@ class JobSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'location', 'skills', 'description', 'category',
             'category_id', 'payment_method', 'status', 'created_at', 'updated_at',
-            'images', 'uploaded_images', 'applications', 'assigned_worker'
+            'images', 'uploaded_images', 'applications', 'assigned_worker', 'client'
         ]
 
     def create(self, validated_data):
@@ -197,7 +198,7 @@ class JobSerializer(serializers.ModelSerializer):
                     JobImage.objects.create(job=instance, image=image)
         return instance
 
-class FeedbackSerializer(serializers.ModelSerializer):
+
     class Meta:
         model = Feedback
         fields = ['id', 'job', 'worker', 'client', 'rating', 'review', 'created_at']
