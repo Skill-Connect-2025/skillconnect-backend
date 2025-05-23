@@ -1,18 +1,16 @@
 from django.urls import path
 from rest_framework.authtoken.views import obtain_auth_token
 from .views import (
-    AuthLoginView, AuthSignupInitiateView, AuthSignupVerifyView,
-    AuthSignupResendCodeView, AuthSignupCompleteView, AuthPasswordResetView,
-    AuthPasswordResetConfirmView, UserProfileView, UserProfileClientView,
-    UserProfileWorkerView, UserApplicationsView
+    AuthLoginView, AuthSignupInitiateView, AuthSignupRequestCodeView,
+    AuthSignupCompleteView, AuthPasswordResetView, AuthPasswordResetConfirmView,
+    UserProfileView, UserProfileClientView, UserProfileWorkerView, UserApplicationsView
 )
 
 urlpatterns = [
     # Authentication
     path('auth/login/', AuthLoginView.as_view(), name='auth_login'),
     path('auth/signup/initiate/', AuthSignupInitiateView.as_view(), name='auth_signup_initiate'),
-    path('auth/signup/verify/', AuthSignupVerifyView.as_view(), name='auth_signup_verify'),
-    path('auth/signup/resend-code/', AuthSignupResendCodeView.as_view(), name='auth_signup_resend_code'),
+    path('auth/signup/request-code/', AuthSignupRequestCodeView.as_view(), name='signup_request_code'),
     path('auth/signup/complete/', AuthSignupCompleteView.as_view(), name='auth_signup_complete'),
 
     # Password Management
@@ -24,5 +22,4 @@ urlpatterns = [
     path('users/profile/client/', UserProfileClientView.as_view(), name='user_profile_client'),
     path('users/profile/worker/', UserProfileWorkerView.as_view(), name='user_profile_worker'),
     path('users/my-applications/', UserApplicationsView.as_view(), name='user_my_applications'),
-   
 ]

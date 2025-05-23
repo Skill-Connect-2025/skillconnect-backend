@@ -20,8 +20,10 @@ from django.utils import timezone
 from twilio.rest import Client as TwilioClient 
 from django.conf import settings
 import random
+import logging
 
 User = get_user_model()
+logger = logging.getLogger('django')
 
 class AuthLoginView(APIView):
     permission_classes = []
@@ -29,23 +31,59 @@ class AuthLoginView(APIView):
     @swagger_auto_schema(
         request_body=LoginSerializer,
         responses={
-            200: openapi.Response('Login successful', openapi.Schema(
-                type=openapi.TYPE_OBJECT,
-                properties={'token': openapi.Schema(type=openapi.TYPE_STRING)}
-            )),
-            400: 'Bad Request'
+            200: openapi.Response(
+                description='Login successful',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'token': openapi.Schema(type=openapi.TYPE_STRING),
+                        'user': openapi.Schema(
+                            type=openapi.TYPE_OBJECT,
+                            properties={
+                                'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                                'username': openapi.Schema(type=openapi.TYPE_STRING),
+                                'first_name': openapi.Schema(type=openapi.TYPE_STRING),
+                                'last_name': openapi.Schema(type=openapi.TYPE_STRING),
+                                'role': openapi.Schema(type=openapi.TYPE_STRING),
+                                'email': openapi.Schema(type=openapi.TYPE_STRING),
+                                'phone_number': openapi.Schema(type=openapi.TYPE_STRING),
+                            }
+                        )
+                    }
+                )
+            ),
+            400: openapi.Response(
+                description='Bad Request',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'non_field_errors': openapi.Schema(
+                            type=openapi.TYPE_ARRAY,
+                            items=openapi.Schema(type=openapi.TYPE_STRING)
+                        )
+                    }
+                )
+            )
         }
     )
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         if serializer.is_valid():
-            user = serializer.save()
-            token, created = Token.objects.get_or_create(user=user)
-            # Update last_activity for worker
-            if hasattr(user, 'worker'):
-                user.worker.last_activity = timezone.now()
-                user.worker.save()
-            return Response({"token": token.key}, status=status.HTTP_200_OK)
+            try:
+                user = serializer.save()
+                token, created = Token.objects.get_or_create(user=user)
+                if hasattr(user, 'worker'):
+                    user.worker.last_activity = timezone.now()
+                    user.worker.save()
+                return Response({
+                    "token": token.key,
+                    "user": UserSerializer(user).data
+                }, status=status.HTTP_200_OK)
+            except Exception as e:
+                return Response(
+                    {"error": str(e)},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class AuthSignupInitiateView(APIView):
@@ -54,14 +92,28 @@ class AuthSignupInitiateView(APIView):
     @swagger_auto_schema(
         request_body=SelectSignupMethodSerializer,
         responses={
-            200: openapi.Response('Signup method selected', openapi.Schema(
-                type=openapi.TYPE_OBJECT,
-                properties={
-                    'user_id': openapi.Schema(type=openapi.TYPE_INTEGER),
-                    'message': openapi.Schema(type=openapi.TYPE_STRING)
-                }
-            )),
-            400: 'Bad Request'
+            200: openapi.Response(
+                description='Signup method selected',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'user_id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                        'message': openapi.Schema(type=openapi.TYPE_STRING)
+                    }
+                )
+            ),
+            400: openapi.Response(
+                description='Bad Request',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'signup_method': openapi.Schema(
+                            type=openapi.TYPE_ARRAY,
+                            items=openapi.Schema(type=openapi.TYPE_STRING)
+                        )
+                    }
+                )
+            )
         }
     )
     def post(self, request):
@@ -71,68 +123,40 @@ class AuthSignupInitiateView(APIView):
             return Response({"user_id": user.id, "message": "Signup method selected"}, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-class AuthSignupVerifyView(APIView):
-    permission_classes = []
-
-    @swagger_auto_schema(
-        request_body=VerifyAndCompleteSerializer,
-        responses={
-            201: openapi.Response('Registration completed', UserSerializer),
-            400: 'Bad Request'
-        }
-    )
-    def post(self, request):
-        serializer = VerifyAndCompleteSerializer(data=request.data)
-        if serializer.is_valid():
-            user = serializer.save()
-            token, created = Token.objects.get_or_create(user=user)
-            return Response(
-                {"token": token.key, "user": UserSerializer(user).data},
-                status=status.HTTP_201_CREATED
-            )
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-class AuthSignupResendCodeView(APIView):
+class AuthSignupRequestCodeView(APIView):
     permission_classes = []
 
     @swagger_auto_schema(
         request_body=SignupRequestSerializer,
         responses={
-            200: openapi.Response('Verification code resent'),
-            400: 'Bad Request'
+            200: openapi.Response(
+                description='Verification code sent or resent',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'message': openapi.Schema(type=openapi.TYPE_STRING)
+                    }
+                )
+            ),
+            400: openapi.Response(
+                description='Bad Request',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'error': openapi.Schema(type=openapi.TYPE_STRING)
+                    }
+                )
+            )
         }
     )
     def post(self, request):
         serializer = SignupRequestSerializer(data=request.data)
         if serializer.is_valid():
             identifier = serializer.validated_data['identifier']
-            user = User.objects.filter(id=serializer.validated_data['user_id']).first()
-            if not user or user.is_verified:
-                return Response({"error": "User not found or already verified"}, status=status.HTTP_400_BAD_REQUEST)
-            
-            code = str(random.randint(100000, 999999))
-            VerificationToken.objects.create(user=user, code=code, purpose='registration')
-
-            if user.signup_method == 'email':
-                subject = "SkillConnect Verification Code"
-                message = f"Your new verification code is: {code}\nThis code expires in 10 minutes."
-                send_mail(
-                    subject,
-                    message,
-                    settings.DEFAULT_FROM_EMAIL,
-                    [identifier],
-                    fail_silently=False,
-                )
-            else:
-                twilio_client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN) 
-                message = f"Your new SkillConnect verification code is: {code}"
-                twilio_client.messages.create(
-                    body=message,
-                    from_=settings.TWILIO_PHONE_NUMBER,
-                    to=identifier
-                )
-
-            return Response({"message": "Verification code resent"}, status=status.HTTP_200_OK)
+            user = serializer.validated_data['user']
+            logger.info(f"Requesting verification code for user {user.id}: {identifier}")
+            serializer.save()
+            return Response({"message": "Verification code sent or resent"}, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class AuthSignupCompleteView(APIView):
@@ -141,8 +165,36 @@ class AuthSignupCompleteView(APIView):
     @swagger_auto_schema(
         request_body=VerifyAndCompleteSerializer,
         responses={
-            201: openapi.Response('Registration completed', UserSerializer),
-            400: 'Bad Request'
+            201: openapi.Response(
+                description='Registration completed',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'token': openapi.Schema(type=openapi.TYPE_STRING),
+                        'user': openapi.Schema(
+                            type=openapi.TYPE_OBJECT,
+                            properties={
+                                'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                                'username': openapi.Schema(type=openapi.TYPE_STRING),
+                                'first_name': openapi.Schema(type=openapi.TYPE_STRING),
+                                'last_name': openapi.Schema(type=openapi.TYPE_STRING),
+                                'role': openapi.Schema(type=openapi.TYPE_STRING),
+                                'email': openapi.Schema(type=openapi.TYPE_STRING),
+                                'phone_number': openapi.Schema(type=openapi.TYPE_STRING),
+                            }
+                        )
+                    }
+                )
+            ),
+            400: openapi.Response(
+                description='Bad Request',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'error': openapi.Schema(type=openapi.TYPE_STRING)
+                    }
+                )
+            )
         }
     )
     def post(self, request):
@@ -162,8 +214,24 @@ class AuthPasswordResetView(APIView):
     @swagger_auto_schema(
         request_body=PasswordResetRequestSerializer,
         responses={
-            200: openapi.Response('Password reset code sent'),
-            400: 'Bad Request'
+            200: openapi.Response(
+                description='Password reset code sent',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'message': openapi.Schema(type=openapi.TYPE_STRING)
+                    }
+                )
+            ),
+            400: openapi.Response(
+                description='Bad Request',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'identifier': openapi.Schema(type=openapi.TYPE_STRING)
+                    }
+                )
+            )
         }
     )
     def post(self, request):
@@ -179,8 +247,24 @@ class AuthPasswordResetConfirmView(APIView):
     @swagger_auto_schema(
         request_body=PasswordResetConfirmSerializer,
         responses={
-            200: openapi.Response('Password reset successful'),
-            400: 'Bad Request'
+            200: openapi.Response(
+                description='Password reset successful',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'message': openapi.Schema(type=openapi.TYPE_STRING)
+                    }
+                )
+            ),
+            400: openapi.Response(
+                description='Bad Request',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'error': openapi.Schema(type=openapi.TYPE_STRING)
+                    }
+                )
+            )
         }
     )
     def post(self, request):
@@ -196,8 +280,25 @@ class UserProfileView(APIView):
 
     @swagger_auto_schema(
         responses={
-            200: UserSerializer,
-            401: 'Unauthorized'
+            200: openapi.Response(
+                description='User profile',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                        'username': openapi.Schema(type=openapi.TYPE_STRING),
+                        'first_name': openapi.Schema(type=openapi.TYPE_STRING),
+                        'last_name': openapi.Schema(type=openapi.TYPE_STRING),
+                        'role': openapi.Schema(type=openapi.TYPE_STRING),
+                        'email': openapi.Schema(type=openapi.TYPE_STRING),
+                        'phone_number': openapi.Schema(type=openapi.TYPE_STRING),
+                    }
+                )
+            ),
+            401: openapi.Response(
+                description='Unauthorized',
+                schema=openapi.Schema(type=openapi.TYPE_OBJECT, properties={'detail': openapi.Schema(type=openapi.TYPE_STRING)})
+            )
         }
     )
     def get(self, request):
@@ -212,9 +313,21 @@ class UserProfileClientView(APIView):
         request_body=ClientProfileSerializer,
         responses={
             200: ClientProfileSerializer,
-            400: 'Bad Request',
-            401: 'Unauthorized',
-            403: 'Forbidden'
+            400: openapi.Response(
+                description='Bad Request',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={'error': openapi.Schema(type=openapi.TYPE_STRING)}
+                )
+            ),
+            401: openapi.Response(
+                description='Unauthorized',
+                schema=openapi.Schema(type=openapi.TYPE_OBJECT, properties={'detail': openapi.Schema(type=openapi.TYPE_STRING)})
+            ),
+            403: openapi.Response(
+                description='Forbidden',
+                schema=openapi.Schema(type=openapi.TYPE_OBJECT, properties={'error': openapi.Schema(type=openapi.TYPE_STRING)})
+            )
         }
     )
     def put(self, request):
@@ -233,8 +346,14 @@ class UserProfileWorkerView(APIView):
     @swagger_auto_schema(
         responses={
             200: WorkerProfileSerializer,
-            401: 'Unauthorized',
-            403: 'Forbidden'
+            401: openapi.Response(
+                description='Unauthorized',
+                schema=openapi.Schema(type=openapi.TYPE_OBJECT, properties={'detail': openapi.Schema(type=openapi.TYPE_STRING)})
+            ),
+            403: openapi.Response(
+                description='Forbidden',
+                schema=openapi.Schema(type=openapi.TYPE_OBJECT, properties={'error': openapi.Schema(type=openapi.TYPE_STRING)})
+            )
         }
     )
     def get(self, request):
@@ -248,9 +367,21 @@ class UserProfileWorkerView(APIView):
         request_body=WorkerProfileSerializer,
         responses={
             200: WorkerProfileSerializer,
-            400: 'Bad Request',
-            401: 'Unauthorized',
-            403: 'Forbidden'
+            400: openapi.Response(
+                description='Bad Request',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={'error': openapi.Schema(type=openapi.TYPE_STRING)}
+                )
+            ),
+            401: openapi.Response(
+                description='Unauthorized',
+                schema=openapi.Schema(type=openapi.TYPE_OBJECT, properties={'detail': openapi.Schema(type=openapi.TYPE_STRING)})
+            ),
+            403: openapi.Response(
+                description='Forbidden',
+                schema=openapi.Schema(type=openapi.TYPE_OBJECT, properties={'error': openapi.Schema(type=openapi.TYPE_STRING)})
+            )
         }
     )
     def put(self, request):
@@ -277,8 +408,14 @@ class UserApplicationsView(APIView):
         operation_description="List all applications submitted by the worker.",
         responses={
             200: JobApplicationSerializer(many=True),
-            401: 'Unauthorized',
-            403: 'Forbidden'
+            401: openapi.Response(
+                description='Unauthorized',
+                schema=openapi.Schema(type=openapi.TYPE_OBJECT, properties={'detail': openapi.Schema(type=openapi.TYPE_STRING)})
+            ),
+            403: openapi.Response(
+                description='Forbidden',
+                schema=openapi.Schema(type=openapi.TYPE_OBJECT, properties={'detail': openapi.Schema(type=openapi.TYPE_STRING)})
+            )
         }
     )
     def get(self, request):

@@ -6,7 +6,9 @@ from apps.users.serializers import UserSerializer
 from core.constants import JOB_STATUS_CHOICES, PAYMENT_METHOD_CHOICES
 from .feedback_serializers import FeedbackSerializer
 import uuid
+import logging
 
+logger = logging.getLogger('django')
 
 class CategorySerializer(serializers.ModelSerializer):
     class Meta:
@@ -40,28 +42,31 @@ class JobApplicationSerializer(serializers.ModelSerializer):
     class Meta:
         model = JobApplication
         fields = ['id', 'job', 'worker', 'worker_id', 'status', 'applied_at']
-        read_only_fields = ['status', 'applied_at']
+        read_only_fields = ['status', 'applied_at'] 
 
     def validate(self, data):
-        job = data['job']
+        job = self.context.get('job') 
         worker = data['worker']
-        
-        # Check if job is open
+        logger.debug(f"Validating application: job={job.id}, worker={worker.id}")
         if job.status != 'open':
+            logger.error(f"Job {job.id} is not open")
             raise serializers.ValidationError("Cannot apply to a non-open job.")
-        
-        # Check if worker has already applied
         if JobApplication.objects.filter(job=job, worker=worker).exists():
+            logger.error(f"Worker {worker.id} already applied to job {job.id}")
             raise serializers.ValidationError("You have already applied to this job.")
-        
-        # Check if worker has any pending requests
         if JobRequest.objects.filter(
             application__worker=worker,
             status='pending'
         ).exists():
+            logger.error(f"Worker {worker.id} has pending requests")
             raise serializers.ValidationError("You have pending job requests. Please respond to them first.")
-        
         return data
+
+    def create(self, validated_data):
+        job = self.context.get('job')  
+        validated_data['job'] = job  
+        return super().create(validated_data)
+
 
 class JobRequestSerializer(serializers.ModelSerializer):
     application = JobApplicationSerializer(read_only=True)
@@ -77,19 +82,15 @@ class JobRequestSerializer(serializers.ModelSerializer):
     def validate(self, data):
         application = data['application']
         job = application.job
-        
-        # Check if job is still open
+        job_id = self.context.get('job_id')
+        if job_id and job.id != job_id:
+            raise serializers.ValidationError("The application does not belong to the specified job.")
         if job.status != 'open':
             raise serializers.ValidationError("Cannot send request for a non-open job.")
-        
-        # Check if a request already exists
         if JobRequest.objects.filter(application=application).exists():
             raise serializers.ValidationError("A request has already been sent for this application.")
-        
-        # Check if job already has an assigned worker
         if job.assigned_worker:
             raise serializers.ValidationError("This job already has an assigned worker.")
-        
         return data
 
 class JobRequestResponseSerializer(serializers.Serializer):
@@ -132,18 +133,18 @@ class PaymentRequestSerializer(serializers.ModelSerializer):
     class Meta:
         model = PaymentRequest
         fields = ['id', 'job', 'worker', 'message', 'created_at']
-        read_only_fields = ['worker', 'created_at']
+        read_only_fields = ['job', 'worker', 'message', 'created_at']
 
     def validate(self, data):
-        job = data['job']
-        worker = self.context['request'].user.worker
+        job = self.context['job']
+        worker = self.context['worker']
         
         # Check if job is completed
         if job.status != 'completed':
             raise serializers.ValidationError("Cannot request payment for a non-completed job.")
         
         # Check if worker is assigned to the job
-        if job.assigned_worker != worker:
+        if not JobApplication.objects.filter(job=job, worker=worker, status='accepted').exists():
             raise serializers.ValidationError("Only the assigned worker can request payment.")
         
         # Check if payment request already exists
@@ -151,6 +152,13 @@ class PaymentRequestSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Payment request already exists.")
         
         return data
+
+    def create(self, validated_data):
+        return PaymentRequest.objects.create(
+            job=self.context['job'],
+            worker=self.context['worker'],
+            message="Payment requested for completed job."
+        )
 
 
 class JobSerializer(serializers.ModelSerializer):
@@ -224,7 +232,7 @@ class PaymentConfirmSerializer(serializers.ModelSerializer):
         read_only_fields = ['client', 'worker', 'payment_method', 'tx_ref', 'transaction_id', 'status', 'created_at']
 
     def validate(self, data):
-        job = data['job']
+        job = self.context['job']  # Use job from context instead of querying
         client = self.context['request'].user
         if job.status != 'pending_payment':
             raise serializers.ValidationError("Cannot confirm payment for a job not pending payment.")
@@ -239,6 +247,10 @@ class PaymentConfirmSerializer(serializers.ModelSerializer):
         return data
 
     def create(self, validated_data):
-        job = validated_data['job']
+        job = self.context['job']
+        validated_data['client'] = self.context['request'].user
+        validated_data['worker'] = job.assigned_worker
+        validated_data['payment_method'] = job.payment_method
         validated_data['tx_ref'] = f"job-{job.id}-{uuid.uuid4().hex[:10]}"
-        return super().create(validated_data)
+        validated_data['status'] = 'pending' if job.payment_method == 'chapa' else 'completed'
+        return Payment.objects.create(**validated_data)
