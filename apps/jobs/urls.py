@@ -1,23 +1,28 @@
 from django.urls import path
 from .views import (
-    JobCreateView, JobListView, JobDetailView,
-    JobUpdateView, JobDeleteView, OpenJobListView,
-    JobApplicationView, JobApplicationsListView,
-    JobRequestView, JobRequestResponseView, JobStatusUpdateView, JobPaymentRequestView
+    JobCreateView, JobListView, JobDetailView, JobUpdateView, JobDeleteView,
+    OpenJobListView, JobApplicationView, JobApplicationsListView,
+    JobRequestView, JobRequestResponseView, JobStatusUpdateView,
+    JobPaymentRequestView, JobFeedbackView, JobPaymentConfirmView,
+    PaymentCallbackView, WorkerJobRequestsView, ClientSentRequestsView
 )
 
 urlpatterns = [
-    path('', JobCreateView.as_view(), name='job-create'),
-    path('list/', JobListView.as_view(), name='job-list'),
-    path('<int:pk>/', JobDetailView.as_view(), name='job-detail'),
-    path('<int:pk>/update/', JobUpdateView.as_view(), name='job-update'),
-    path('<int:pk>/delete/', JobDeleteView.as_view(), name='job-delete'),
-    path('open/', OpenJobListView.as_view(), name='open-job-list'),
-    path('<int:pk>/apply/', JobApplicationView.as_view(), name='job-apply'),
-    path('<int:pk>/applications/', JobApplicationsListView.as_view(), name='job-applications'),
-    path('<int:pk>/request/', JobRequestView.as_view(), name='job-request'),
-    path('<int:pk>/request/<int:request_id>/respond/', JobRequestResponseView.as_view(), name='job-request-respond'),
-    path('<int:pk>/status/', JobStatusUpdateView.as_view(), name='job-status-update'),
-    path('<int:pk>/payment/request/', JobPaymentRequestView.as_view(), name='job-payment-request'),
-    
+    path('jobs/create/', JobCreateView.as_view(), name='job_create'),
+    path('jobs/', JobListView.as_view(), name='job_list'),
+    path('jobs/<int:pk>/details/', JobDetailView.as_view(), name='job_details'), 
+    path('jobs/<int:id>/update/', JobUpdateView.as_view(), name='job_update'),
+    path('jobs/<int:pk>/delete/', JobDeleteView.as_view(), name='job_delete'),
+    path('jobs/open/', OpenJobListView.as_view(), name='open_jobs'),
+    path('jobs/<int:id>/apply/', JobApplicationView.as_view(), name='job_apply'),
+    path('jobs/<int:id>/applications/', JobApplicationsListView.as_view(), name='job_applications'),
+    path('jobs/<int:id>/request/', JobRequestView.as_view(), name='job_request'),
+    path('jobs/<int:pk>/requests/<int:request_id>/respond/', JobRequestResponseView.as_view(), name='job_request_response'),
+    path('jobs/<int:pk>/status/', JobStatusUpdateView.as_view(), name='job_status_update'),
+    path('jobs/<int:pk>/payment-request/', JobPaymentRequestView.as_view(), name='job_payment_request'),
+    path('jobs/<int:pk>/feedback/', JobFeedbackView.as_view(), name='job_feedback'),
+    path('jobs/<int:id>/payment-confirm/', JobPaymentConfirmView.as_view(), name='job_payment_confirm'),
+    path('payment/callback/', PaymentCallbackView.as_view(), name='payment_callback'),
+    path('worker/requests/', WorkerJobRequestsView.as_view(), name='worker_job_requests'), 
+    path('client/requests/', ClientSentRequestsView.as_view(), name='client_sent_requests'), 
 ]

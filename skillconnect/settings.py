@@ -127,6 +127,38 @@ SWAGGER_SETTINGS = {
     'DEFAULT_MODEL_RENDERING': 'example',
 }
 
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'file': {
+            'level': 'ERROR',
+            'class': 'logging.FileHandler',
+            'filename': 'notifications.log',
+            'formatter': 'verbose',
+        },
+        'console': {
+            'level': 'ERROR',
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'loggers': {
+        '': {
+            'handlers': ['file', 'console'],
+            'level': 'ERROR',
+            'propagate': True,
+        },
+    },
+}
+
+
 TWILIO_ACCOUNT_SID = env('TWILIO_ACCOUNT_SID', default='')
 TWILIO_AUTH_TOKEN = env('TWILIO_AUTH_TOKEN', default='')
 TWILIO_PHONE_NUMBER = env('TWILIO_PHONE_NUMBER', default='')
@@ -138,3 +170,15 @@ EMAIL_USE_TLS = env.bool('EMAIL_USE_TLS', default=True)
 EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='')
 DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default='SkillConnect <lily.yishak2@gmail.com>')
+
+CHAPA_SECRET_KEY = os.getenv('CHAPA_SECRET_KEY')
+CHAPA_PUBLIC_KEY = os.getenv('CHAPA_PUBLIC_KEY')
+CHAPA_PAYMENT_ENDPOINT = os.getenv('CHAPA_PAYMENT_ENDPOINT')
+CHAPA_VERIFY_ENDPOINT = os.getenv('CHAPA_VERIFY_ENDPOINT')
+CHAPA_BANKS_ENDPOINT = os.getenv('CHAPA_BANKS_ENDPOINT')
+CHAPA_TRANSFER_ENDPOINT = os.getenv('CHAPA_TRANSFER_ENDPOINT')
+CHAPA_TRANSFER_VERIFICATION_ENDPOINT = os.getenv('CHAPA_TRANSFER_VERIFICATION_ENDPOINT')
+CHAPA_TRANSACTION_VERIFICATION_ENDPOINT = os.getenv('CHAPA_TRANSACTION_VERIFICATION_ENDPOINT')
+CHAPA_CALLBACK_URL = 'https://api.skillconnect.wisewaytech.com/jobs/payment-callback/'
+CHAPA_RETURN_URL = os.getenv('CHAPA_RETURN_URL')
+CHAPA_WEBHOOK_SECRET = os.getenv('CHAPA_WEBHOOK_SECRET')

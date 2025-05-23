@@ -65,3 +65,38 @@ class PaymentRequest(models.Model):
 
     def __str__(self):
         return f"Payment request for {self.job.title} by {self.worker.user.username}"
+
+class Feedback(models.Model):
+    job = models.OneToOneField(Job, on_delete=models.CASCADE, related_name='feedback')
+    worker = models.ForeignKey(Worker, on_delete=models.CASCADE, related_name='feedback')
+    client = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='feedback')
+    rating = models.IntegerField(choices=[(i, i) for i in range(1, 6)])  # 1 to 5 stars
+    review = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('job', 'worker', 'client')
+
+    def __str__(self):
+        return f"Feedback for {self.worker.user.username} on {self.job.title} ({self.rating}/5)"
+
+class Payment(models.Model):
+    job = models.OneToOneField(Job, on_delete=models.CASCADE, related_name='payment')
+    client = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='payments')
+    worker = models.ForeignKey(Worker, on_delete=models.CASCADE, related_name='payments')
+    payment_method = models.CharField(max_length=50, choices=PAYMENT_METHOD_CHOICES)
+    amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    tx_ref = models.CharField(max_length=100, unique=True, blank=True, null=True)
+    transaction_id = models.CharField(max_length=100, blank=True, null=True)
+    status = models.CharField(
+        max_length=20,
+        choices=[('pending', 'Pending'), ('completed', 'Completed'), ('failed', 'Failed')],
+        default='pending'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('job',)
+
+    def __str__(self):
+        return f"Payment for {self.job.title} by {self.client.username}"

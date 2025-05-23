@@ -1,5 +1,6 @@
 
 JOB_STATUS_CHOICES = (
+    ('posted', 'Posted'),
     ('open', 'Open'),
     ('closed', 'Closed'),
     ('pending', 'Pending'),
@@ -7,9 +8,15 @@ JOB_STATUS_CHOICES = (
     ('pending_payment', 'Pending Payment'),
     ('completed', 'Completed'),
     ('incomplete', 'Incomplete'),
+    ('assigned', 'Assigned'),
+    ('paid', 'Paid'),
+    ('cancelled', 'Cancelled'),
 )
 
 PAYMENT_METHOD_CHOICES = (
-    ('chapa', 'Chapa'),
     ('cash', 'Cash'),
+    ('chapa', 'Chapa'),
+    ('telebirr', 'TeleBirr'),
+    ('e_birr', 'E-Birr'),
 )
+
