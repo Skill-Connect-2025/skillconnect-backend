@@ -2,7 +2,7 @@ from django.db import models
 from django.conf import settings
 from core.constants import JOB_STATUS_CHOICES, PAYMENT_METHOD_CHOICES
 from apps.users.models import Worker
-
+from django.contrib.auth.models import User
 class Category(models.Model):
     name = models.CharField(max_length=100, unique=True)
 
@@ -80,23 +80,40 @@ class Feedback(models.Model):
     def __str__(self):
         return f"Feedback for {self.worker.user.username} on {self.job.title} ({self.rating}/5)"
 
-class Payment(models.Model):
-    job = models.OneToOneField(Job, on_delete=models.CASCADE, related_name='payment')
-    client = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='payments')
-    worker = models.ForeignKey(Worker, on_delete=models.CASCADE, related_name='payments')
-    payment_method = models.CharField(max_length=50, choices=PAYMENT_METHOD_CHOICES)
-    amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    tx_ref = models.CharField(max_length=100, unique=True, blank=True, null=True)
-    transaction_id = models.CharField(max_length=100, blank=True, null=True)
+class Transaction(models.Model):
+    job = models.ForeignKey(Job, on_delete=models.CASCADE, related_name='transactions')
+    client = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='client_transactions'
+    )
+    worker = models.ForeignKey(
+        Worker,
+        on_delete=models.CASCADE,
+        related_name='worker_transactions'
+    )
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    currency = models.CharField(max_length=3, default='ETB')
+    tx_ref = models.CharField(max_length=100, unique=True)
+    transaction_id = models.CharField(max_length=100, null=True, blank=True)
+    payment_method = models.CharField(
+        max_length=50,
+        choices=[('cash', 'Cash'), ('chapa', 'Chapa')]
+    )
     status = models.CharField(
-        max_length=20,
-        choices=[('pending', 'Pending'), ('completed', 'Completed'), ('failed', 'Failed')],
+        max_length=50,
+        choices=[
+            ('pending', 'Pending'),
+            ('completed', 'Completed'),
+            ('failed', 'Failed')
+        ],
         default='pending'
     )
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = ('job',)
+        ordering = ['-created_at']
 
     def __str__(self):
-        return f"Payment for {self.job.title} by {self.client.username}"
+        return f"Transaction {self.tx_ref} for Job {self.job.title}"

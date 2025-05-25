@@ -3,8 +3,9 @@ from .views import (
     JobCreateView, JobListView, JobDetailView, JobUpdateView, JobDeleteView,
     OpenJobListView, JobApplicationView, JobApplicationsListView,
     JobRequestView, JobRequestResponseView, JobStatusUpdateView,
-    JobPaymentRequestView, JobFeedbackView, JobPaymentConfirmView,
-    PaymentCallbackView, WorkerJobRequestsView, ClientSentRequestsView
+    JobPaymentRequestView, JobFeedbackView,
+    PaymentCallbackView, WorkerJobRequestsView, ClientSentRequestsView, 
+    PaymentConfirmView,PaymentCallbackView
 )
 
 urlpatterns = [
@@ -21,8 +22,9 @@ urlpatterns = [
     path('jobs/<int:pk>/status/', JobStatusUpdateView.as_view(), name='job_status_update'),
     path('jobs/<int:pk>/payment-request/', JobPaymentRequestView.as_view(), name='job_payment_request'),
     path('jobs/<int:pk>/feedback/', JobFeedbackView.as_view(), name='job_feedback'),
-    path('jobs/<int:id>/payment-confirm/', JobPaymentConfirmView.as_view(), name='job_payment_confirm'),
     path('payment/callback/', PaymentCallbackView.as_view(), name='payment_callback'),
     path('worker/requests/', WorkerJobRequestsView.as_view(), name='worker_job_requests'), 
     path('client/requests/', ClientSentRequestsView.as_view(), name='client_sent_requests'), 
+    path('jobs/<int:id>/payment-confirm/', PaymentConfirmView.as_view(), name='payment-confirm'),
+    path('jobs/payment-callback/', PaymentCallbackView.as_view(), name='payment-callback'),
 ]
