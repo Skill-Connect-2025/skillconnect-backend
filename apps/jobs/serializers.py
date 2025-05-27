@@ -225,6 +225,8 @@ class JobSerializer(serializers.ModelSerializer):
 
 
 class TransactionSerializer(serializers.ModelSerializer):
+    amount = serializers.FloatField(min_value=0.01)
+
     class Meta:
         model = Transaction
         fields = [
@@ -238,17 +240,7 @@ class TransactionSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         job = self.context['job']
-        amount = self.context['request'].data.get('amount')
-
-        # Validate amount
-        if not amount:
-            raise serializers.ValidationError("Amount is required.")
-        try:
-            amount = float(amount)
-            if amount <= 0:
-                raise ValueError
-        except (ValueError, TypeError):
-            raise serializers.ValidationError("Amount must be a positive number.")
+        amount = data['amount']
 
         # Check job status
         if job.status != 'pending_payment':

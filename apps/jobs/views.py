@@ -20,6 +20,10 @@ from django.contrib.auth import get_user_model
 from django.views.decorators.csrf import csrf_exempt
 from .serializers import TransactionSerializer
 from django.core.exceptions import ObjectDoesNotExist
+from .serializers import TransactionSerializer
+from .utils import initialize_payment
+from django.core.exceptions import ObjectDoesNotExist
+from rest_framework.serializers import ValidationError
 import logging
 import hmac
 import hashlib
@@ -124,17 +128,17 @@ class JobListView(APIView):
         operation_description="List all jobs posted by the authenticated client.",
         responses={200: JobSerializer(many=True), 401: 'Unauthorized', 403: 'Forbidden'}
     )
-    def get(self, request):  # Fixed: Added get method
+    def get(self, request):  
         queryset = Job.objects.filter(client=self.request.user)
         serializer = JobSerializer(queryset, many=True)
         return Response(serializer.data)
 
-class JobDetailView(generics.RetrieveAPIView):  # Fixed: Changed to RetrieveAPIView
+class JobDetailView(generics.RetrieveAPIView):  
     queryset = Job.objects.all()
     serializer_class = JobSerializer
     permission_classes = [IsAuthenticated, IsClient]
 
-    def get_object(self):  # Fixed: Added get_object method
+    def get_object(self):  
         job = super().get_object()
         if job.client != self.request.user:
             self.permission_denied(self.request, message="Not authorized to view this job")
@@ -173,7 +177,7 @@ class JobUpdateView(APIView):
             404: 'Not Found'
         }
     )
-    def put(self, request, id):  # Fixed: Changed parameter from pk to id
+    def put(self, request, id):  
         try:
             job = Job.objects.get(pk=id, client=request.user)
         except Job.DoesNotExist:
@@ -241,7 +245,7 @@ class JobApplicationView(APIView):
             404: openapi.Response('Not Found')
         }
     )
-    def post(self, request, id):  # Fixed: Changed parameter from id to id (already correct)
+    def post(self, request, id): 
         try:
             job = Job.objects.get(pk=id)
         except Job.DoesNotExist:
@@ -290,7 +294,7 @@ class JobApplicationsListView(APIView):
 
 
 class UserApplicationsView(APIView):
-    permission_classes = [IsAuthenticated, IsWorker]  # Fixed: Changed to IsWorker
+    permission_classes = [IsAuthenticated, IsWorker] 
 
     @swagger_auto_schema(
         operation_description="List all applications submitted by the authenticated worker.",
@@ -300,7 +304,7 @@ class UserApplicationsView(APIView):
             403: 'Forbidden'
         }
     )
-    def get(self, request):  # Fixed: Removed pk parameter
+    def get(self, request):  
         applications = JobApplication.objects.filter(worker=request.user.worker)
         serializer = JobApplicationSerializer(applications, many=True)
         return Response(serializer.data)
@@ -418,7 +422,7 @@ class JobRequestResponseView(APIView):
             job_request.application.save()
             job.assigned_worker = request.user.worker
             job.status = 'in_progress'
-            job.save()  # Ensure job is saved
+            job.save()  
             # Notify client
             email_subject = f"Worker Accepted Request for Job: {job.title}"
             email_message = (
@@ -618,9 +622,7 @@ class ClientSentRequestsView(APIView):
         serializer = JobRequestSerializer(requests, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-
 class PaymentConfirmView(APIView):
-
     permission_classes = [IsAuthenticated]
 
     @swagger_auto_schema(
@@ -635,40 +637,42 @@ class PaymentConfirmView(APIView):
             201: openapi.Schema(
                 type=openapi.TYPE_OBJECT,
                 properties={
-                    'payment': openapi.Schema(type=openapi.TYPE_OBJECT, properties={
-                        'id': openapi.Schema(type=openapi.TYPE_INTEGER),
-                        'job': openapi.Schema(type=openapi.TYPE_INTEGER),
-                        'client': openapi.Schema(type=openapi.TYPE_INTEGER),
-                        'worker': openapi.Schema(type=openapi.TYPE_INTEGER),
-                        'amount': openapi.Schema(type=openapi.TYPE_STRING),
-                        'currency': openapi.Schema(type=openapi.TYPE_STRING),
-                        'tx_ref': openapi.Schema(type=openapi.TYPE_STRING),
-                        'transaction_id': openapi.Schema(type=openapi.TYPE_STRING, nullable=True),
-                        'payment_method': openapi.Schema(type=openapi.TYPE_STRING),
-                        'status': openapi.Schema(type=openapi.TYPE_STRING),
-                        'created_at': openapi.Schema(type=openapi.TYPE_STRING, format='date-time')
-                    }),
+                    'payment': openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        properties={
+                            'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'job': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'client': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'worker': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'amount': openapi.Schema(type=openapi.TYPE_STRING),
+                            'currency': openapi.Schema(type=openapi.TYPE_STRING),
+                            'tx_ref': openapi.Schema(type=openapi.TYPE_STRING),
+                            'transaction_id': openapi.Schema(type=openapi.TYPE_STRING, nullable=True),
+                            'payment_method': openapi.Schema(type=openapi.TYPE_STRING),
+                            'status': openapi.Schema(type=openapi.TYPE_STRING),
+                            'created_at': openapi.Schema(type=openapi.TYPE_STRING, format='date-time')
+                        }
+                    ),
                     'checkout_url': openapi.Schema(type=openapi.TYPE_STRING)
                 }
             ),
-            400: 'Bad Request', 401: 'Unauthorized', 404: 'Not Found', 503: 'Service Unavailable'
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            404: 'Not Found',
+            503: 'Service Unavailable'
         }
     )
-    
     def post(self, request, id):
         try:
             job = Job.objects.get(id=id, client=request.user)
-            
-            # Validate using TransactionSerializer
-            serializer = TransactionSerializer(data={}, context={'job': job, 'request': request})
+            serializer = TransactionSerializer(data=request.data, context={'job': job, 'request': request})
             serializer.is_valid(raise_exception=True)
+            amount = serializer.validated_data['amount']
 
-            amount = float(request.data.get('amount'))
+            if not job.assigned_worker:
+                raise ValidationError("No worker assigned to job")
 
-            # Initialize Chapa payment
             checkout_url, tx_ref = initialize_payment(job, request.user, amount)
-
-            # Create Transaction record
             transaction = Transaction.objects.create(
                 job=job,
                 client=request.user,
@@ -680,9 +684,7 @@ class PaymentConfirmView(APIView):
                 status='pending'
             )
 
-            # Serialize the transaction for response
             response_serializer = TransactionSerializer(transaction)
-            
             return Response(
                 {
                     'payment': response_serializer.data,
@@ -697,19 +699,43 @@ class PaymentConfirmView(APIView):
                 {'error': 'Job not found or not authorized'},
                 status=status.HTTP_404_NOT_FOUND
             )
-        except Exception as e:
-            logger.error(f'Payment confirmation failed: {str(e)}')
+        except ValidationError as e:
+            logger.error(f'Validation error: {str(e)}')
             return Response(
                 {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except ValueError as e:
+            logger.error(f'Chapa initialization error: {str(e)}')
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except requests.exceptions.HTTPError as e:
+            logger.error(f'Chapa HTTP error: {str(e)}')
+            return Response(
+                {'error': f'Invalid payment request: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except requests.exceptions.RequestException as e:
+            logger.error(f'Chapa API error: {str(e)}')
+            return Response(
+                {'error': 'Unable to connect to payment service'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        except Exception as e:
+            logger.error(f'Unexpected error in PaymentConfirmView: {str(e)}')
+            return Response(
+                {'error': 'Payment service unavailable'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE
             )
 
 class PaymentCallbackView(APIView):
     @csrf_exempt
     def post(self, request):
-        # Verify webhook signature (if provided)
+    
         secret = settings.CHAPA_WEBHOOK_SECRET.encode('utf-8')
-        signature = request.headers.get('Chapa-Signature')  # Adjust if different
+        signature = request.headers.get('Chapa-Signature')  
         if signature:
             computed_signature = hmac.new(
                 secret,

@@ -1,54 +1,63 @@
-# apps/jobs/utils.py
-import uuid
 import requests
+import uuid
 import logging
+import re
 from django.conf import settings
-from django.core.mail import send_mail
-import environ
 
 logger = logging.getLogger(__name__)
 
-def initialize_payment(job, client, amount):
-    """
-    Initialize a Chapa payment for a job.
-    Returns (checkout_url, tx_ref) or raises an exception.
-    """
-    tx_ref = f"job-{job.id}-client-{client.id}-{uuid.uuid4().hex[:10]}"
-    data = {
+def initialize_payment(job, user, amount):
+    tx_ref = f"job-{job.id}-client-{user.id}-{uuid.uuid4().hex[:6]}"
+    
+    description = re.sub(r'[^a-zA-Z0-9\-_\s.]', '', job.title)[:100] 
+    payload = {
         'amount': str(amount),
         'currency': 'ETB',
-        'email': client.email,
-        'first_name': client.first_name or 'Anonymous',
-        'last_name': client.last_name or '',
-        'phone_number': client.worker_profile.phone_number or '0912345678',
+        'email': user.email or 'lily.yishak',
+        'first_name': user.first_name or '',
+        'last_name': user.last_name or '',
+        'phone_number': user.phone_number or '',
         'tx_ref': tx_ref,
         'callback_url': 'https://api.skillconnect.wisewaytech.com/jobs/payment-callback/',
-        'return_url': 'https://frontend-placeholder.com/payment/complete/',  # Placeholder for frontend
+        'return_url': '',
         'customization': {
-            'title': f'SkillConnect Payment for {job.title}',
-            'description': f'Payment for job ID {job.id}'
+            'title': f'Job {job.id} Payment'[:16], 
+            'description': description
         }
     }
     headers = {
-        'Authorization': f'Bearer {settings.CHAPA_SECRET_KEY}',
+        'Authorization': f'Bearer {settings.CHAPA_SECRET_KEY.strip()}',
         'Content-Type': 'application/json'
     }
     try:
+        logger.info(f"Sending Chapa request: {payload}")
         response = requests.post(
-            f'{settings.CHAPA_BASE_URL}/transaction/initialize',
-            json=data,
-            headers=headers
+            f"{settings.CHAPA_BASE_URL}/transaction/initialize",
+            json=payload,
+            headers=headers,
+            timeout=10,
+            verify=True
         )
         response.raise_for_status()
-        result = response.json()
-        if result.get('status') == 'success':
-            return result['data']['checkout_url'], tx_ref
+        data = response.json()
+        logger.info(f"Chapa response: {data}")
+        if data.get('status') == 'success':
+            return data['data']['checkout_url'], tx_ref
         else:
-            logger.error(f'Chapa initialization failed: {result}')
-            raise Exception(f'Chapa initialization failed: {result.get("message")}')
-    except requests.RequestException as e:
-        logger.error(f'Chapa request failed: {str(e)}')
-        raise Exception(f'Payment service unavailable: {str(e)}')
+            logger.error(f"Chapa initialization failed: {data}")
+            raise ValueError(f"Chapa initialization failed: {data.get('message', 'Unknown error')}")
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"Chapa HTTP error: {str(e)}, Response: {response.text}")
+        raise ValueError(f"Invalid payment request: {response.text}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Chapa request failed: {str(e)}, Response: {response.text if 'response' in locals() else 'No response'}")
+        raise
+    except ValueError as e:
+        logger.error(f"Chapa payload error: {str(e)}")
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in initialize_payment: {str(e)}")
+        raise
 
 def verify_payment(tx_ref):
     """
