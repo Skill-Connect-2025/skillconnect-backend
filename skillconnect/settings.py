@@ -46,14 +46,43 @@ MIDDLEWARE = [
 ]
 
 # CORS settings
-CORS_ALLOWED_ORIGINS = [
-    'https://skillconnect.wisewaytech.com',  # Production frontend
-    "http://localhost:3000",
-    "http://localhost:5173"
-]
+CORS_ALLOW_ALL_ORIGINS = True  # This allows all origins
+
+# Keep these in case you want to revert later
+# CORS_ALLOWED_ORIGINS = [
+#     'https://skillconnect.wisewaytech.com',  # Production frontend
+#     "http://localhost:3000",
+#     "http://localhost:5173"
+# ]
 
 # Allow credentials (e.g., for token authentication)
 CORS_ALLOW_CREDENTIALS = True
+
+# Allow specific methods
+CORS_ALLOW_METHODS = [
+    'DELETE',
+    'GET',
+    'OPTIONS',
+    'PATCH',
+    'POST',
+    'PUT',
+]
+
+# Allow specific headers
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+    'access-control-allow-origin',
+    'cache-control',
+    'pragma',
+]
 
 ROOT_URLCONF = 'skillconnect.urls'
 
