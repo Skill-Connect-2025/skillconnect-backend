@@ -25,6 +25,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework.authtoken',
     'drf_yasg',
+    'corsheaders',
     'apps.users',
     'apps.jobs',
     'apps.payments',
@@ -38,10 +39,19 @@ MIDDLEWARE = [
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
+
+# CORS settings
+CORS_ALLOWED_ORIGINS = [
+    'https://skillconnect.wisewaytech.com',  # Production frontend
+]
+
+# Allow credentials (e.g., for token authentication)
+CORS_ALLOW_CREDENTIALS = True
 
 ROOT_URLCONF = 'skillconnect.urls'
 
