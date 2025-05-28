@@ -48,6 +48,8 @@ MIDDLEWARE = [
 # CORS settings
 CORS_ALLOWED_ORIGINS = [
     'https://skillconnect.wisewaytech.com',  # Production frontend
+    "http://localhost:3000",
+    "http://localhost:5173."
 ]
 
 # Allow credentials (e.g., for token authentication)
