@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Job, JobImage, Category, JobApplication, JobRequest, Feedback, PaymentRequest, Payment
+from .models import Job, JobImage, Category, JobApplication, JobRequest, Feedback, PaymentRequest, Transaction
 from apps.users.models import Worker
 from .models import PaymentRequest
 from apps.users.serializers import UserSerializer
@@ -7,6 +7,7 @@ from core.constants import JOB_STATUS_CHOICES, PAYMENT_METHOD_CHOICES
 from .feedback_serializers import FeedbackSerializer
 import uuid
 import logging
+from django.views.decorators.csrf import csrf_exempt
 
 logger = logging.getLogger('django')
 
@@ -222,35 +223,35 @@ class JobSerializer(serializers.ModelSerializer):
                     JobImage.objects.create(job=instance, image=image)
         return instance
 
-class PaymentConfirmSerializer(serializers.ModelSerializer):
-    amount = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True)
-    tx_ref = serializers.CharField(max_length=100, required=False, read_only=True)
+
+class TransactionSerializer(serializers.ModelSerializer):
+    amount = serializers.FloatField(min_value=0.01)
 
     class Meta:
-        model = Payment
-        fields = ['id', 'job', 'client', 'worker', 'payment_method', 'amount', 'tx_ref', 'transaction_id', 'status', 'created_at']
-        read_only_fields = ['client', 'worker', 'payment_method', 'tx_ref', 'transaction_id', 'status', 'created_at']
+        model = Transaction
+        fields = [
+            'id', 'job', 'client', 'worker', 'amount', 'currency', 'tx_ref',
+            'transaction_id', 'payment_method', 'status', 'created_at'
+        ]
+        read_only_fields = [
+            'id', 'job', 'client', 'worker', 'currency', 'tx_ref',
+            'transaction_id', 'payment_method', 'status', 'created_at'
+        ]
 
     def validate(self, data):
-        job = self.context['job']  # Use job from context instead of querying
-        client = self.context['request'].user
-        if job.status != 'pending_payment':
-            raise serializers.ValidationError("Cannot confirm payment for a job not pending payment.")
-        if job.client != client:
-            raise serializers.ValidationError("Only the job's client can confirm payment.")
-        if Payment.objects.filter(job=job).exists():
-            raise serializers.ValidationError("Payment already confirmed for this job.")
-        if data.get('payment_method', job.payment_method) != job.payment_method:
-            raise serializers.ValidationError("Payment method must match the job's payment method.")
-        if job.payment_method != 'cash' and not data.get('amount'):
-            raise serializers.ValidationError("Amount is required for non-cash payments.")
-        return data
-
-    def create(self, validated_data):
         job = self.context['job']
-        validated_data['client'] = self.context['request'].user
-        validated_data['worker'] = job.assigned_worker
-        validated_data['payment_method'] = job.payment_method
-        validated_data['tx_ref'] = f"job-{job.id}-{uuid.uuid4().hex[:10]}"
-        validated_data['status'] = 'pending' if job.payment_method == 'chapa' else 'completed'
-        return Payment.objects.create(**validated_data)
+        amount = data['amount']
+
+        # Check job status
+        if job.status != 'pending_payment':
+            raise serializers.ValidationError("Job must be in pending_payment status.")
+
+        # Check payment method
+        if job.payment_method != 'chapa':
+            raise serializers.ValidationError("Job must use Chapa payment method.")
+
+        # Check if transaction already exists
+        if Transaction.objects.filter(job=job, status='pending').exists():
+            raise serializers.ValidationError("A pending transaction already exists for this job.")
+
+        return data

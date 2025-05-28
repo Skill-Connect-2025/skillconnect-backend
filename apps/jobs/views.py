@@ -4,18 +4,26 @@ from rest_framework import status, generics
 from rest_framework.permissions import IsAuthenticated
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
-from .models import Job, JobApplication, JobRequest, Feedback, PaymentRequest, Payment, JobImage, Category
+from .models import Job, JobApplication, JobRequest, Feedback, PaymentRequest, Transaction, JobImage, Category
 from .serializers import (
     JobSerializer, JobApplicationSerializer, JobRequestSerializer,
     PaymentRequestSerializer, FeedbackSerializer, JobRequestResponseSerializer,
-    JobStatusUpdateSerializer, PaymentConfirmSerializer,
+    JobStatusUpdateSerializer
 )
 from core.utils import IsClient, IsWorker
+from .utils import initialize_payment, verify_payment
 from django.core.mail import send_mail
 from django.conf import settings
 from twilio.base.exceptions import TwilioRestException
 from twilio.rest import Client as TwilioClient
 from django.contrib.auth import get_user_model
+from django.views.decorators.csrf import csrf_exempt
+from .serializers import TransactionSerializer
+from django.core.exceptions import ObjectDoesNotExist
+from .serializers import TransactionSerializer
+from .utils import initialize_payment
+from django.core.exceptions import ObjectDoesNotExist
+from rest_framework.serializers import ValidationError
 import logging
 import hmac
 import hashlib
@@ -120,17 +128,17 @@ class JobListView(APIView):
         operation_description="List all jobs posted by the authenticated client.",
         responses={200: JobSerializer(many=True), 401: 'Unauthorized', 403: 'Forbidden'}
     )
-    def get(self, request):  # Fixed: Added get method
+    def get(self, request):  
         queryset = Job.objects.filter(client=self.request.user)
         serializer = JobSerializer(queryset, many=True)
         return Response(serializer.data)
 
-class JobDetailView(generics.RetrieveAPIView):  # Fixed: Changed to RetrieveAPIView
+class JobDetailView(generics.RetrieveAPIView):  
     queryset = Job.objects.all()
     serializer_class = JobSerializer
     permission_classes = [IsAuthenticated, IsClient]
 
-    def get_object(self):  # Fixed: Added get_object method
+    def get_object(self):  
         job = super().get_object()
         if job.client != self.request.user:
             self.permission_denied(self.request, message="Not authorized to view this job")
@@ -169,7 +177,7 @@ class JobUpdateView(APIView):
             404: 'Not Found'
         }
     )
-    def put(self, request, id):  # Fixed: Changed parameter from pk to id
+    def put(self, request, id):  
         try:
             job = Job.objects.get(pk=id, client=request.user)
         except Job.DoesNotExist:
@@ -237,7 +245,7 @@ class JobApplicationView(APIView):
             404: openapi.Response('Not Found')
         }
     )
-    def post(self, request, id):  # Fixed: Changed parameter from id to id (already correct)
+    def post(self, request, id): 
         try:
             job = Job.objects.get(pk=id)
         except Job.DoesNotExist:
@@ -286,7 +294,7 @@ class JobApplicationsListView(APIView):
 
 
 class UserApplicationsView(APIView):
-    permission_classes = [IsAuthenticated, IsWorker]  # Fixed: Changed to IsWorker
+    permission_classes = [IsAuthenticated, IsWorker] 
 
     @swagger_auto_schema(
         operation_description="List all applications submitted by the authenticated worker.",
@@ -296,198 +304,10 @@ class UserApplicationsView(APIView):
             403: 'Forbidden'
         }
     )
-    def get(self, request):  # Fixed: Removed pk parameter
+    def get(self, request):  
         applications = JobApplication.objects.filter(worker=request.user.worker)
         serializer = JobApplicationSerializer(applications, many=True)
         return Response(serializer.data)
-
-class JobPaymentConfirmView(APIView):
-    permission_classes = [IsAuthenticated, IsClient]
-
-    @swagger_auto_schema(
-        operation_description="Confirm payment for a job in pending_payment status using Chapa (test mode) or cash.",
-        request_body=openapi.Schema(
-            type=openapi.TYPE_OBJECT,
-            properties={
-                'amount': openapi.Schema(type=openapi.TYPE_NUMBER, description='Payment amount (required for non-cash, optional for cash)', nullable=True),
-            },
-        ),
-        responses={
-            201: PaymentConfirmSerializer,
-            400: 'Bad Request',
-            401: 'Unauthorized',
-            403: 'Forbidden',
-            404: 'Not Found'
-        }
-    )
-    def post(self, request, id):
-        try:
-            job = Job.objects.get(id=id, client=request.user)
-        except Job.DoesNotExist:
-            return Response({"error": "Job not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
-
-        if job.payment_method == 'cash':
-            data = request.data.copy()
-            data['job'] = job.id
-            data['client'] = request.user.id
-            data['worker'] = job.assigned_worker.id
-            data['payment_method'] = job.payment_method
-            serializer = PaymentConfirmSerializer(data=data, context={'request': request})
-            if serializer.is_valid():
-                payment = serializer.save(status='completed')
-                job.status = 'paid'
-                job.save()
-                self.send_notifications(job, payment)
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        data = request.data.copy()
-        data['job'] = job.id
-        data['client'] = request.user.id
-        data['worker'] = job.assigned_worker.id
-        data['payment_method'] = job.payment_method
-        serializer = PaymentConfirmSerializer(data=data, context={'request': request})
-        if serializer.is_valid():
-            payment = serializer.save(status='pending')
-            chapa_response = self.initialize_chapa_payment(payment, request.user)
-            if chapa_response['status']:
-                payment.transaction_id = chapa_response['data'].get('id')
-                payment.save()
-                return Response({
-                    'payment': serializer.data,
-                    'checkout_url': chapa_response['data']['checkout_url']
-                }, status=status.HTTP_201_CREATED)
-            else:
-                payment.delete()
-                return Response({"error": chapa_response['message']}, status=status.HTTP_400_BAD_REQUEST)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    def initialize_chapa_payment(self, payment, user):
-        job = payment.job
-        body = {
-            'amount': str(payment.amount),
-            'currency': 'ETB',
-            'email': user.email,
-            'first_name': user.first_name,
-            'last_name': user.last_name or '',
-            'phone_number': user.phone_number or '0912345678',  # Fallback number
-            'tx_ref': payment.tx_ref,
-            'callback_url': settings.CHAPA_CALLBACK_URL,
-            'return_url': settings.CHAPA_RETURN_URL,
-            'customization[title]': f"Payment for Job: {job.title}",
-            'customization[description]': f"Payment to {job.assigned_worker.user.first_name} for job ID {job.id}"
-        }
-        headers = {
-            'Authorization': f'Bearer {settings.CHAPA_SECRET_KEY}',
-            'Content-Type': 'application/json'
-        }
-        try:
-            response = requests.post(settings.CHAPA_PAYMENT_ENDPOINT, json=body, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-            if data.get('status') == 'success':
-                return {'status': True, 'data': data['data']}
-            return {'status': False, 'message': data.get('message', 'Chapa transaction failed')}
-        except requests.RequestException as e:
-            logger.error(f"Chapa initialization failed: {str(e)}")
-            return {'status': False, 'message': str(e)}
-
-    def send_notifications(self, job, payment):
-        status_message = "confirmed" if payment.status == 'completed' else "failed"
-        email_subject = f"Payment {status_message.capitalize()} for Job: {job.title}"
-        email_message = (
-            f"Dear {job.assigned_worker.user.first_name},\n\n"
-            f"Client {job.client.first_name} has {status_message} payment for job: {job.title}.\n"
-            f"Payment Method: {payment.payment_method}\n"
-            f"Amount: {payment.amount or 'Not specified'}\n"
-            f"Transaction ID: {payment.transaction_id or 'Not applicable'}\n"
-            f"Status: {payment.status}\n\n"
-            f"Best regards,\nSkillConnect Team"
-        )
-        sms_message = f"Payment {status_message} for job: {job.title}. Method: {payment.payment_method}. Status: {payment.status}."
-        send_notification(job.assigned_worker.user, email_subject, email_message, sms_message)
-
-class PaymentCallbackView(APIView):
-    permission_classes = []
-
-    @swagger_auto_schema(
-        operation_description="Handle Chapa webhook for payment verification in test mode, including failed payments.",
-        responses={
-            200: 'Payment verified',
-            400: 'Verification failed',
-            401: 'Invalid webhook signature'
-        }
-    )
-    def post(self, request):
-        signature = request.headers.get('Chapa-Webhook-Signature')
-        if not self.verify_webhook_signature(request.body, signature):
-            logger.error("Invalid webhook signature")
-            return Response({"error": "Invalid webhook signature"}, status=status.HTTP_401_UNAUTHORIZED)
-
-        tx_ref = request.data.get('tx_ref')
-        if not tx_ref:
-            logger.error("Missing tx_ref in webhook payload")
-            return Response({"error": "Missing tx_ref"}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            payment = Payment.objects.get(tx_ref=tx_ref)
-        except Payment.DoesNotExist:
-            logger.error(f"Payment with tx_ref {tx_ref} not found")
-            return Response({"error": "Payment not found"}, status=status.HTTP_404_NOT_FOUND)
-
-        verification = self.verify_chapa_payment(tx_ref)
-        if verification['status']:
-            payment.status = 'completed'
-            payment.transaction_id = verification['data'].get('id')
-            payment.job.status = 'paid'
-        else:
-            payment.status = 'failed'
-            payment.job.status = 'pending_payment'
-        payment.save()
-        payment.job.save()
-        self.send_notifications(payment.job, payment)
-        return Response({"message": f"Payment {payment.status}"}, status=status.HTTP_200_OK)
-
-    def verify_webhook_signature(self, payload, signature):
-        if not signature or not settings.CHAPA_WEBHOOK_SECRET:
-            return False
-        expected_signature = hmac.new(
-            settings.CHAPA_WEBHOOK_SECRET.encode('utf-8'),
-            payload,
-            hashlib.sha256
-        ).hexdigest()
-        return hmac.compare_digest(expected_signature, signature)
-
-    def verify_chapa_payment(self, tx_ref):
-        headers = {
-            'Authorization': f'Bearer {settings.CHAPA_SECRET_KEY}',
-            'Content-Type': 'application/json'
-        }
-        try:
-            response = requests.get(f"{settings.CHAPA_VERIFY_ENDPOINT}/{tx_ref}", headers=headers)
-            response.raise_for_status()
-            data = response.json()
-            if data.get('status') == 'success' and data['data']['status'] == 'success':
-                return {'status': True, 'data': data['data']}
-            return {'status': False, 'message': data.get('message', 'Verification failed')}
-        except requests.RequestException as e:
-            logger.error(f"Chapa verification failed for tx_ref {tx_ref}: {str(e)}")
-            return {'status': False, 'message': str(e)}
-
-    def send_notifications(self, job, payment):
-        status_message = "confirmed" if payment.status == 'completed' else "failed"
-        email_subject = f"Payment {status_message.capitalize()} for Job: {job.title}"
-        email_message = (
-            f"Dear {job.assigned_worker.user.first_name},\n\n"
-            f"Client {job.client.first_name} has {status_message} payment for job: {job.title}.\n"
-            f"Payment Method: {payment.payment_method}\n"
-            f"Amount: {payment.amount or 'Not specified'}\n"
-            f"Transaction ID: {payment.transaction_id or 'Not applicable'}\n"
-            f"Status: {payment.status}\n\n"
-            f"Best regards,\nSkillConnect Team"
-        )
-        sms_message = f"Payment {status_message} for job: {job.title}. Method: {payment.payment_method}. Status: {payment.status}."
-        send_notification(job.assigned_worker.user, email_subject, email_message, sms_message)
         
 
 class JobRequestView(APIView):
@@ -602,7 +422,7 @@ class JobRequestResponseView(APIView):
             job_request.application.save()
             job.assigned_worker = request.user.worker
             job.status = 'in_progress'
-            job.save()  # Ensure job is saved
+            job.save()  
             # Notify client
             email_subject = f"Worker Accepted Request for Job: {job.title}"
             email_message = (
@@ -801,18 +621,17 @@ class ClientSentRequestsView(APIView):
         requests = JobRequest.objects.filter(application__job__client=request.user)
         serializer = JobRequestSerializer(requests, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
-    
-class JobPaymentConfirmView(APIView):
-    permission_classes = [IsAuthenticated, IsClient]
+
+class PaymentConfirmView(APIView):
+    permission_classes = [IsAuthenticated]
 
     @swagger_auto_schema(
-        operation_description="Confirm payment for a job in pending_payment status using Chapa (test mode) or cash.",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
-            required=['amount'],
             properties={
-                'amount': openapi.Schema(type=openapi.TYPE_NUMBER, description='Payment amount')
+                'amount': openapi.Schema(type=openapi.TYPE_NUMBER, description='Payment amount in ETB')
             },
+            required=['amount']
         ),
         responses={
             201: openapi.Schema(
@@ -825,10 +644,11 @@ class JobPaymentConfirmView(APIView):
                             'job': openapi.Schema(type=openapi.TYPE_INTEGER),
                             'client': openapi.Schema(type=openapi.TYPE_INTEGER),
                             'worker': openapi.Schema(type=openapi.TYPE_INTEGER),
-                            'payment_method': openapi.Schema(type=openapi.TYPE_STRING),
                             'amount': openapi.Schema(type=openapi.TYPE_STRING),
+                            'currency': openapi.Schema(type=openapi.TYPE_STRING),
                             'tx_ref': openapi.Schema(type=openapi.TYPE_STRING),
-                            'transaction_id': openapi.Schema(type=openapi.TYPE_STRING),
+                            'transaction_id': openapi.Schema(type=openapi.TYPE_STRING, nullable=True),
+                            'payment_method': openapi.Schema(type=openapi.TYPE_STRING),
                             'status': openapi.Schema(type=openapi.TYPE_STRING),
                             'created_at': openapi.Schema(type=openapi.TYPE_STRING, format='date-time')
                         }
@@ -838,71 +658,141 @@ class JobPaymentConfirmView(APIView):
             ),
             400: 'Bad Request',
             401: 'Unauthorized',
-            403: 'Forbidden',
-            404: 'Not Found'
+            404: 'Not Found',
+            503: 'Service Unavailable'
         }
     )
     def post(self, request, id):
         try:
-            job = Job.objects.get(pk=id, client=request.user)
-        except Job.DoesNotExist:
-            return Response({"error": "Job not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
-        data = request.data.copy()
-        data['job'] = job.id  # Set job ID (integer) instead of Job object
-        serializer = PaymentConfirmSerializer(data=data, context={'request': request, 'job': job})
-        if serializer.is_valid():
-            payment = serializer.save()
-            if job.payment_method == 'chapa':
-                try:
-                    headers = {
-                        'Authorization': f'Bearer {settings.CHAPA_SECRET_KEY}',
-                        'Content-Type': 'application/json'
-                    }
-                    chapa_data = {
-                        'amount': float(payment.amount),
-                        'currency': 'ETB',
-                        'email': request.user.email,
-                        'tx_ref': payment.tx_ref,
-                        'callback_url': settings.CHAPA_CALLBACK_URL,
-                        'return_url': settings.CHAPA_RETURN_URL,
-                        'first_name': request.user.first_name,
-                        'last_name': request.user.last_name,
-                        'title': f"Payment for job: {job.title}",
-                        'description': f"Payment for job ID {job.id}"
-                    }
-                    response = requests.post(settings.CHAPA_PAYMENT_ENDPOINT, json=chapa_data, headers=headers)
-                    response.raise_for_status()
-                    chapa_response = response.json()
-                    if chapa_response.get('status') == 'success':
-                        payment.transaction_id = chapa_response['data']['id']
-                        payment.save()
-                        return Response({
-                            'payment': PaymentConfirmSerializer(payment).data,
-                            'checkout_url': chapa_response['data']['checkout_url']
-                        }, status=status.HTTP_201_CREATED)
-                    else:
-                        logger.error(f"Chapa payment initiation failed: {chapa_response.get('message')}")
-                        payment.delete()
-                        return Response({"error": "Failed to initiate payment"}, status=status.HTTP_400_BAD_REQUEST)
-                except requests.RequestException as e:
-                    logger.error(f"Chapa payment request failed: {str(e)}")
-                    payment.delete()
-                    return Response({"error": "Payment service unavailable"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-            else:  # Cash payment
-                payment.status = 'completed'
-                payment.save()
-                job.status = 'paid'
-                job.save()
-                # Notify worker
-                email_subject = f"Payment Confirmed for Job: {job.title}"
-                email_message = (
-                    f"Dear {job.assigned_worker.user.first_name},\n\n"
-                    f"Client {request.user.first_name} has confirmed payment for job: {job.title}.\n"
-                    f"Payment Method: {payment.payment_method}\n"
-                    f"Amount: {payment.amount or 'Not specified'}\n\n"
-                    f"Best regards,\nSkillConnect Team"
+            job = Job.objects.get(id=id, client=request.user)
+            serializer = TransactionSerializer(data=request.data, context={'job': job, 'request': request})
+            serializer.is_valid(raise_exception=True)
+            amount = serializer.validated_data['amount']
+
+            if not job.assigned_worker:
+                raise ValidationError("No worker assigned to job")
+
+            checkout_url, tx_ref = initialize_payment(job, request.user, amount)
+            transaction = Transaction.objects.create(
+                job=job,
+                client=request.user,
+                worker=job.assigned_worker,
+                amount=amount,
+                currency='ETB',
+                tx_ref=tx_ref,
+                payment_method='chapa',
+                status='pending'
+            )
+
+            response_serializer = TransactionSerializer(transaction)
+            return Response(
+                {
+                    'payment': response_serializer.data,
+                    'checkout_url': checkout_url
+                },
+                status=status.HTTP_201_CREATED
+            )
+
+        except ObjectDoesNotExist:
+            logger.error(f'Job {id} not found or not authorized for user {request.user.id}')
+            return Response(
+                {'error': 'Job not found or not authorized'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except ValidationError as e:
+            logger.error(f'Validation error: {str(e)}')
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except ValueError as e:
+            logger.error(f'Chapa initialization error: {str(e)}')
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except requests.exceptions.HTTPError as e:
+            logger.error(f'Chapa HTTP error: {str(e)}')
+            return Response(
+                {'error': f'Invalid payment request: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except requests.exceptions.RequestException as e:
+            logger.error(f'Chapa API error: {str(e)}')
+            return Response(
+                {'error': 'Unable to connect to payment service'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        except Exception as e:
+            logger.error(f'Unexpected error in PaymentConfirmView: {str(e)}')
+            return Response(
+                {'error': 'Payment service unavailable'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+
+class PaymentCallbackView(APIView):
+    @csrf_exempt
+    def post(self, request):
+    
+        secret = settings.CHAPA_WEBHOOK_SECRET.encode('utf-8')
+        signature = request.headers.get('Chapa-Signature')  
+        if signature:
+            computed_signature = hmac.new(
+                secret,
+                request.body,
+                hashlib.sha256
+            ).hexdigest()
+            if not hmac.compare_digest(computed_signature, signature):
+                logger.error('Invalid webhook signature')
+                return Response(
+                    {'error': 'Invalid webhook signature'},
+                    status=status.HTTP_401_UNAUTHORIZED
                 )
-                sms_message = f"Payment confirmed for job: {job.title}. Method: {payment.payment_method}."
-                send_notification(job.assigned_worker.user, email_subject, email_message, sms_message)
-                return Response({'payment': PaymentConfirmSerializer(payment).data}, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = request.data
+        tx_ref = data.get('tx_ref')
+        payment_status = data.get('status')
+
+        try:
+            transaction = Transaction.objects.get(tx_ref=tx_ref)
+            if payment_status.lower() == 'success':
+                # Verify with Chapa
+                verification = verify_payment(tx_ref)
+                if verification.get('status') == 'success':
+                    transaction.status = 'completed'
+                    transaction.transaction_id = verification['data'].get('id')
+                    transaction.save()
+
+                    # Update job status
+                    job = transaction.job
+                    job.status = 'paid'
+                    job.save()
+
+                    logger.info(f'Payment verified for tx_ref: {tx_ref}')
+                    return Response(
+                        {'message': 'Payment verified'},
+                        status=status.HTTP_200_OK
+                    )
+                else:
+                    transaction.status = 'failed'
+                    transaction.save()
+                    logger.error(f'Payment verification failed for tx_ref: {tx_ref}')
+                    return Response(
+                        {'error': 'Verification failed'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            else:
+                transaction.status = 'failed'
+                transaction.save()
+                logger.error(f'Payment failed for tx_ref: {tx_ref}')
+                return Response(
+                    {'error': 'Payment failed'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        except Transaction.DoesNotExist:
+            logger.error(f'Transaction not found for tx_ref: {tx_ref}')
+            return Response(
+                {'error': 'Transaction not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )

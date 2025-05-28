@@ -4520,3 +4520,101 @@ Traceback (most recent call last):
     payment.transaction_id = chapa_response['data']['id']
                              ~~~~~~~~~~~~~~~~~~~~~~^^^^^^
 KeyError: 'id'
+ERROR 2025-05-26 11:22:12,299 views Failed to send SMS to +251911123456: 
+[31m[49mHTTP Error[0m [37m[49mYour request was:[0m
+
+[36m[49mPOST /Accounts/AC823a2d98dfa5943d9fce1142187bff3e/Messages.json[0m
+
+[37m[49mTwilio returned the following information:[0m
+
+[34m[49mUnable to create record: 'From' +251911031697 is not a Twilio phone number or Short Code country mismatch[0m
+
+[37m[49mMore information may be available here:[0m
+
+[34m[49mhttps://www.twilio.com/docs/errors/21659[0m
+
+
+ERROR 2025-05-26 11:29:13,870 views Failed to send SMS to +251911123456: 
+[31m[49mHTTP Error[0m [37m[49mYour request was:[0m
+
+[36m[49mPOST /Accounts/AC823a2d98dfa5943d9fce1142187bff3e/Messages.json[0m
+
+[37m[49mTwilio returned the following information:[0m
+
+[34m[49mUnable to create record: 'From' +251911031697 is not a Twilio phone number or Short Code country mismatch[0m
+
+[37m[49mMore information may be available here:[0m
+
+[34m[49mhttps://www.twilio.com/docs/errors/21659[0m
+
+
+ERROR 2025-05-26 11:45:20,037 views Failed to send SMS to +251911123456: 
+[31m[49mHTTP Error[0m [37m[49mYour request was:[0m
+
+[36m[49mPOST /Accounts/AC823a2d98dfa5943d9fce1142187bff3e/Messages.json[0m
+
+[37m[49mTwilio returned the following information:[0m
+
+[34m[49mUnable to create record: 'From' +251911031697 is not a Twilio phone number or Short Code country mismatch[0m
+
+[37m[49mMore information may be available here:[0m
+
+[34m[49mhttps://www.twilio.com/docs/errors/21659[0m
+
+
+ERROR 2025-05-26 12:15:57,649 views Payment confirmation failed: {'amount': [ErrorDetail(string='This field is required.', code='required')]}
+ERROR 2025-05-26 12:15:57,657 log Service Unavailable: /jobs/jobs/1/payment-confirm/
+ERROR 2025-05-26 12:16:29,593 views Payment confirmation failed: {'amount': [ErrorDetail(string='This field is required.', code='required')]}
+ERROR 2025-05-26 12:16:29,594 log Service Unavailable: /jobs/jobs/1/payment-confirm/
+ERROR 2025-05-26 12:49:42,961 views Payment confirmation failed: 'User' object has no attribute 'worker_profile'
+ERROR 2025-05-26 12:49:42,964 log Service Unavailable: /jobs/jobs/1/payment-confirm/
+ERROR 2025-05-26 12:50:55,306 views Payment confirmation failed: 'User' object has no attribute 'worker_profile'
+ERROR 2025-05-26 12:50:55,308 log Service Unavailable: /jobs/jobs/1/payment-confirm/
+ERROR 2025-05-26 13:01:40,734 views Payment confirmation failed: 'User' object has no attribute 'worker_profile'
+ERROR 2025-05-26 13:01:40,736 log Service Unavailable: /jobs/jobs/1/payment-confirm/
+ERROR 2025-05-26 13:01:52,509 views Payment confirmation failed: 'User' object has no attribute 'worker_profile'
+ERROR 2025-05-26 13:01:52,509 log Service Unavailable: /jobs/jobs/1/payment-confirm/
+ERROR 2025-05-26 13:59:18,115 log Internal Server Error: /jobs/jobs/1/payment-confirm/
+Traceback (most recent call last):
+  File "C:\Users\Ab\OneDrive\Desktop\Senior_Project\skillconnect-backend\apps\jobs\views.py", line 667, in post
+    checkout_url, tx_ref = initialize_payment(job, request.user, amount)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Ab\OneDrive\Desktop\Senior_Project\skillconnect-backend\apps\jobs\utils.py", line 22, in initialize_payment
+    'phone_number': client.worker_profile.phone_number or '0912345678',
+                    ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'User' object has no attribute 'worker_profile'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Ab\OneDrive\Desktop\Senior_Project\skillconnect-backend\venv\Lib\site-packages\django\core\handlers\exception.py", line 55, in inner
+    response = get_response(request)
+               ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Ab\OneDrive\Desktop\Senior_Project\skillconnect-backend\venv\Lib\site-packages\django\core\handlers\base.py", line 197, in _get_response
+    response = wrapped_callback(request, *callback_args, **callback_kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Ab\OneDrive\Desktop\Senior_Project\skillconnect-backend\venv\Lib\site-packages\django\views\decorators\csrf.py", line 65, in _view_wrapper
+    return view_func(request, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Ab\OneDrive\Desktop\Senior_Project\skillconnect-backend\venv\Lib\site-packages\django\views\generic\base.py", line 104, in view
+    return self.dispatch(request, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Ab\OneDrive\Desktop\Senior_Project\skillconnect-backend\venv\Lib\site-packages\rest_framework\views.py", line 515, in dispatch
+    response = self.handle_exception(exc)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Ab\OneDrive\Desktop\Senior_Project\skillconnect-backend\venv\Lib\site-packages\rest_framework\views.py", line 475, in handle_exception
+    self.raise_uncaught_exception(exc)
+  File "C:\Users\Ab\OneDrive\Desktop\Senior_Project\skillconnect-backend\venv\Lib\site-packages\rest_framework\views.py", line 486, in raise_uncaught_exception
+    raise exc
+  File "C:\Users\Ab\OneDrive\Desktop\Senior_Project\skillconnect-backend\venv\Lib\site-packages\rest_framework\views.py", line 512, in dispatch
+    response = handler(request, *args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Ab\OneDrive\Desktop\Senior_Project\skillconnect-backend\apps\jobs\views.py", line 696, in post
+    except ValidationError as e:
+           ^^^^^^^^^^^^^^^
+NameError: name 'ValidationError' is not defined
+ERROR 2025-05-26 14:01:26,989 views Unexpected error: 'User' object has no attribute 'worker_profile'
+ERROR 2025-05-26 14:01:26,992 log Service Unavailable: /jobs/jobs/1/payment-confirm/
+ERROR 2025-05-26 14:30:47,979 utils Chapa request failed: 400 Client Error: Bad Request for url: https://api.chapa.co/v1/transaction/initialize, Response: {"message":{"customization.title":["The customization.title must not exceed 16 characters."],"customization.description":["The customization.description may only contain letters, numbers, hyphens, underscores, spaces, and dots."]},"status":"failed","data":null}
+ERROR 2025-05-26 14:30:47,982 views Chapa API error: 400 Client Error: Bad Request for url: https://api.chapa.co/v1/transaction/initialize
+ERROR 2025-05-26 14:30:47,983 log Service Unavailable: /jobs/jobs/1/payment-confirm/
