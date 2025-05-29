@@ -697,10 +697,6 @@ class PaymentConfirmView(APIView):
                 status='pending'
             )
 
-            # Update job status to completed
-            job.status = 'completed'
-            job.save()
-
             # Notify client
             email_subject = f"Payment Initiated for Job: {job.title}"
             email_message = (
@@ -779,20 +775,14 @@ class PaymentConfirmView(APIView):
 class PaymentCallbackView(APIView):
     @csrf_exempt
     def post(self, request):
+        logger.debug(f"Received webhook: {request.data}")
         secret = settings.CHAPA_WEBHOOK_SECRET.encode('utf-8')
-        signature = request.headers.get('Chapa-Signature')  
+        signature = request.headers.get('Chapa-Signature')
         if signature:
-            computed_signature = hmac.new(
-                secret,
-                request.body,
-                hashlib.sha256
-            ).hexdigest()
+            computed_signature = hmac.new(secret, request.body, hashlib.sha256).hexdigest()
             if not hmac.compare_digest(computed_signature, signature):
                 logger.error('Invalid webhook signature')
-                return Response(
-                    {'error': 'Invalid webhook signature'},
-                    status=status.HTTP_401_UNAUTHORIZED
-                )
+                return Response({'error': 'Invalid webhook signature'}, status=status.HTTP_401_UNAUTHORIZED)
 
         data = request.data
         tx_ref = data.get('tx_ref')
@@ -808,9 +798,9 @@ class PaymentCallbackView(APIView):
                     transaction.transaction_id = verification['data'].get('id')
                     transaction.save()
 
-                    # Update job status to paid
+                    # Update job status to completed
                     job = transaction.job
-                    job.status = 'paid'
+                    job.status = 'completed'
                     job.save()
 
                     # Notify client
