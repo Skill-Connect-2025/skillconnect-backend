@@ -309,7 +309,6 @@ class UserApplicationsView(APIView):
         serializer = JobApplicationSerializer(applications, many=True)
         return Response(serializer.data)
         
-
 class JobRequestView(APIView):
     permission_classes = [IsAuthenticated, IsClient]
 
@@ -342,7 +341,7 @@ class JobRequestView(APIView):
             request_obj = serializer.save()
             worker = request_obj.application.worker.user
             client = request.user
-            # Notify worker
+            # Notify worker (without contact info)
             email_subject = f"New Job Request for {job.title}"
             email_message = (
                 f"Dear {worker.first_name} {worker.last_name},\n\n"
@@ -351,18 +350,15 @@ class JobRequestView(APIView):
                 f"- Title: {job.title}\n"
                 f"- Location: {job.location}\n"
                 f"- Description: {job.description}\n\n"
-                f"Client Contact Information:\n"
-                f"- Email: {client.email}\n"
-                f"- Phone: {client.phone_number or 'Not provided'}\n\n"
                 f"Please log in to SkillConnect to review and respond to this request.\n\n"
                 f"Best regards,\nSkillConnect Team"
             )
             sms_message = (
                 f"New job request for '{job.title}' from {client.first_name} {client.last_name}. "
-                f"Contact: {client.email}, {client.phone_number or 'Not provided'}. Log in to respond."
+                f"Log in to SkillConnect to respond."
             )
             send_notification(worker, email_subject, email_message, sms_message)
-            # Notify client
+            # Notify client (without contact info)
             email_subject = f"Job Request Sent for {job.title}"
             email_message = (
                 f"Dear {client.first_name} {client.last_name},\n\n"
@@ -371,15 +367,12 @@ class JobRequestView(APIView):
                 f"- Title: {job.title}\n"
                 f"- Location: {job.location}\n"
                 f"- Description: {job.description}\n\n"
-                f"Worker Contact Information:\n"
-                f"- Email: {worker.email}\n"
-                f"- Phone: {worker.phone_number or 'Not provided'}\n\n"
                 f"You will be notified once the worker responds.\n\n"
                 f"Best regards,\nSkillConnect Team"
             )
             sms_message = (
                 f"Your request for '{job.title}' has been sent to {worker.first_name} {worker.last_name}. "
-                f"Contact: {worker.email}, {worker.phone_number or 'Not provided'}."
+                f"Await their response on SkillConnect."
             )
             send_notification(client, email_subject, email_message, sms_message)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -423,12 +416,14 @@ class JobRequestResponseView(APIView):
             job.assigned_worker = request.user.worker
             job.status = 'in_progress'
             job.save()  
-            # Notify client
+            # Notify client (with contact info)
             email_subject = f"Worker Accepted Request for Job: {job.title}"
             email_message = (
                 f"Dear {job.client.first_name},\n\n"
                 f"Worker {request.user.first_name} {request.user.last_name} has accepted your request for job: {job.title}.\n"
-                f"Contact them at:\nEmail: {request.user.email}\nPhone: {request.user.phone_number or 'Not provided'}\n\n"
+                f"Contact them at:\n"
+                f"- Email: {request.user.email}\n"
+                f"- Phone: {request.user.phone_number or 'Not provided'}\n\n"
                 f"Best regards,\nSkillConnect Team"
             )
             sms_message = (
@@ -436,19 +431,37 @@ class JobRequestResponseView(APIView):
                 f"Contact: {request.user.email}, {request.user.phone_number or 'Not provided'}"
             )
             send_notification(job.client, email_subject, email_message, sms_message)
-            # Notify worker
+            # Notify worker (with contact info)
             email_subject = f"Assigned to Job: {job.title}"
             email_message = (
                 f"Dear {request.user.first_name},\n\n"
                 f"You have been assigned to job: {job.title}.\n"
-                f"Contact the client at:\nEmail: {job.client.email}\nPhone: {job.client.phone_number or 'Not provided'}\n\n"
+                f"Contact the client at:\n"
+                f"- Email: {job.client.email}\n"
+                f"- Phone: {job.client.phone_number or 'Not provided'}\n\n"
                 f"Best regards,\nSkillConnect Team"
             )
-            sms_message = f"Assigned to job: {job.title}. Contact client: {job.client.email}"
+            sms_message = (
+                f"Assigned to job: {job.title}. "
+                f"Contact client: {job.client.email}, {job.client.phone_number or 'Not provided'}"
+            )
             send_notification(request.user, email_subject, email_message, sms_message)
-        else:
+        else:  # Rejected
             job_request.application.status = 'rejected'
             job_request.application.save()
+            # Notify client (no contact info)
+            email_subject = f"Worker Rejected Request for Job: {job.title}"
+            email_message = (
+                f"Dear {job.client.first_name},\n\n"
+                f"Worker {request.user.first_name} {request.user.last_name} has rejected your request for job: {job.title}.\n"
+                f"Please consider sending requests to other workers.\n\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            sms_message = (
+                f"Worker {request.user.first_name} rejected job: {job.title}. "
+                f"Send requests to other workers on SkillConnect."
+            )
+            send_notification(job.client, email_subject, email_message, sms_message)
         serializer = JobRequestSerializer(job_request)
         return Response(serializer.data)
     
@@ -684,6 +697,35 @@ class PaymentConfirmView(APIView):
                 status='pending'
             )
 
+            # Notify client
+            email_subject = f"Payment Initiated for Job: {job.title}"
+            email_message = (
+                f"Dear {job.client.first_name},\n\n"
+                f"You have initiated a payment of {amount} ETB for job: {job.title}.\n"
+                f"Please complete the payment via the provided checkout link.\n"
+                f"Checkout URL: {checkout_url}\n\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            sms_message = (
+                f"Payment of {amount} ETB initiated for job: {job.title}. "
+                f"Complete it at the checkout link."
+            )
+            send_notification(job.client, email_subject, email_message, sms_message)
+
+            # Notify worker
+            email_subject = f"Payment Initiated for Job: {job.title}"
+            email_message = (
+                f"Dear {job.assigned_worker.user.first_name},\n\n"
+                f"The client has initiated a payment of {amount} ETB for job: {job.title}.\n"
+                f"You will be notified once the payment is confirmed.\n\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            sms_message = (
+                f"Payment of {amount} ETB initiated for job: {job.title}. "
+                f"Awaiting confirmation."
+            )
+            send_notification(job.assigned_worker.user, email_subject, email_message, sms_message)
+
             response_serializer = TransactionSerializer(transaction)
             return Response(
                 {
@@ -733,21 +775,14 @@ class PaymentConfirmView(APIView):
 class PaymentCallbackView(APIView):
     @csrf_exempt
     def post(self, request):
-    
+        logger.debug(f"Received webhook: {request.data}")
         secret = settings.CHAPA_WEBHOOK_SECRET.encode('utf-8')
-        signature = request.headers.get('Chapa-Signature')  
+        signature = request.headers.get('Chapa-Signature')
         if signature:
-            computed_signature = hmac.new(
-                secret,
-                request.body,
-                hashlib.sha256
-            ).hexdigest()
+            computed_signature = hmac.new(secret, request.body, hashlib.sha256).hexdigest()
             if not hmac.compare_digest(computed_signature, signature):
                 logger.error('Invalid webhook signature')
-                return Response(
-                    {'error': 'Invalid webhook signature'},
-                    status=status.HTTP_401_UNAUTHORIZED
-                )
+                return Response({'error': 'Invalid webhook signature'}, status=status.HTTP_401_UNAUTHORIZED)
 
         data = request.data
         tx_ref = data.get('tx_ref')
@@ -763,10 +798,36 @@ class PaymentCallbackView(APIView):
                     transaction.transaction_id = verification['data'].get('id')
                     transaction.save()
 
-                    # Update job status
+                    # Update job status to completed
                     job = transaction.job
-                    job.status = 'paid'
+                    job.status = 'completed'
                     job.save()
+
+                    # Notify client
+                    email_subject = f"Payment Confirmed for Job: {job.title}"
+                    email_message = (
+                        f"Dear {job.client.first_name},\n\n"
+                        f"Your payment of {transaction.amount} ETB for job: {job.title} has been confirmed.\n"
+                        f"Thank you for using SkillConnect.\n\n"
+                        f"Best regards,\nSkillConnect Team"
+                    )
+                    sms_message = (
+                        f"Payment of {transaction.amount} ETB for job: {job.title} confirmed."
+                    )
+                    send_notification(job.client, email_subject, email_message, sms_message)
+
+                    # Notify worker
+                    email_subject = f"Payment Received for Job: {job.title}"
+                    email_message = (
+                        f"Dear {job.assigned_worker.user.first_name},\n\n"
+                        f"The payment of {transaction.amount} ETB for job: {job.title} has been confirmed.\n"
+                        f"Thank you for your work.\n\n"
+                        f"Best regards,\nSkillConnect Team"
+                    )
+                    sms_message = (
+                        f"Payment of {transaction.amount} ETB for job: {job.title} received."
+                    )
+                    send_notification(job.assigned_worker.user, email_subject, email_message, sms_message)
 
                     logger.info(f'Payment verified for tx_ref: {tx_ref}')
                     return Response(
@@ -793,6 +854,6 @@ class PaymentCallbackView(APIView):
         except Transaction.DoesNotExist:
             logger.error(f'Transaction not found for tx_ref: {tx_ref}')
             return Response(
-                {'error': 'Transaction not found'},
+                {'error': 'Transaction not found'}, 
                 status=status.HTTP_404_NOT_FOUND
             )

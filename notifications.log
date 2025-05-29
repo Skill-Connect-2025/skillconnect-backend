@@ -4618,3 +4618,17 @@ ERROR 2025-05-26 14:01:26,992 log Service Unavailable: /jobs/jobs/1/payment-conf
 ERROR 2025-05-26 14:30:47,979 utils Chapa request failed: 400 Client Error: Bad Request for url: https://api.chapa.co/v1/transaction/initialize, Response: {"message":{"customization.title":["The customization.title must not exceed 16 characters."],"customization.description":["The customization.description may only contain letters, numbers, hyphens, underscores, spaces, and dots."]},"status":"failed","data":null}
 ERROR 2025-05-26 14:30:47,982 views Chapa API error: 400 Client Error: Bad Request for url: https://api.chapa.co/v1/transaction/initialize
 ERROR 2025-05-26 14:30:47,983 log Service Unavailable: /jobs/jobs/1/payment-confirm/
+ERROR 2025-05-29 10:34:48,734 views Failed to send SMS to +251911123456: 
+[31m[49mHTTP Error[0m [37m[49mYour request was:[0m
+
+[36m[49mPOST /Accounts/AC823a2d98dfa5943d9fce1142187bff3e/Messages.json[0m
+
+[37m[49mTwilio returned the following information:[0m
+
+[34m[49mUnable to create record: 'From' +251911031697 is not a Twilio phone number or Short Code country mismatch[0m
+
+[37m[49mMore information may be available here:[0m
+
+[34m[49mhttps://www.twilio.com/docs/errors/21659[0m
+
+
