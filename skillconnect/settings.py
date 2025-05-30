@@ -207,7 +207,7 @@ EMAIL_PORT = env.int('EMAIL_PORT', default=587)
 EMAIL_USE_TLS = env.bool('EMAIL_USE_TLS', default=True)
 EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='')
-DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default='SkillConnect <lily.yishak2@gmail.com>')
+DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL')
 
 CHAPA_SECRET_KEY = env('CHAPA_SECRET_KEY')
 CHAPA_PUBLIC_KEY = env('CHAPA_PUBLIC_KEY')
