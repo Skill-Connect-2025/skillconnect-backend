@@ -85,6 +85,11 @@ class Client(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='client')
     profile_pic = models.ImageField(upload_to='profile_pics/', blank=True, null=True)
     location = models.CharField(max_length=100, blank=True, null=True)
+    payment_method_preference = models.CharField(
+        max_length=10,
+        choices=[('cash', 'Cash'), ('chapa', 'Chapa')],
+        default='cash'
+    )
 
     def __str__(self):
         return f"Client: {self.user.username}"
@@ -99,6 +104,11 @@ class Worker(models.Model):
     has_experience = models.BooleanField(default=False)
     join_date = models.DateTimeField(default=timezone.now, null=True) 
     last_activity = models.DateTimeField(null=True, blank=True)
+    payment_method_preference = models.CharField(
+        max_length=10,
+        choices=[('cash', 'Cash'), ('chapa', 'Chapa')],
+        default='cash'
+    )
 
     @property
     def years_of_experience(self):

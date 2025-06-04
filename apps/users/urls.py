@@ -4,7 +4,8 @@ from .views import (
     AuthLoginView, AuthSignupInitiateView, AuthSignupRequestCodeView,
     AuthSignupCompleteView, AuthPasswordResetView, AuthPasswordResetConfirmView,
     UserProfileView, UserProfileClientView, UserProfileWorkerView, UserApplicationsView,
-    UserRatingStatsView, UserReviewsView, RecentReviewsView
+    UserRatingStatsView, UserReviewsView, RecentReviewsView, PaymentPreferenceView,
+    WorkersByPaymentMethodView, JobsByPaymentMethodView
 )
 
 urlpatterns = [
@@ -23,6 +24,11 @@ urlpatterns = [
     path('users/profile/client/', UserProfileClientView.as_view(), name='user_profile_client'),
     path('users/profile/worker/', UserProfileWorkerView.as_view(), name='user_profile_worker'),
     path('users/my-applications/', UserApplicationsView.as_view(), name='user_my_applications'),
+    
+    # Payment Preferences
+    path('users/payment-preference/', PaymentPreferenceView.as_view(), name='payment_preference'),
+    path('users/workers/by-payment-method/', WorkersByPaymentMethodView.as_view(), name='workers_by_payment_method'),
+    path('users/jobs/by-payment-method/', JobsByPaymentMethodView.as_view(), name='jobs_by_payment_method'),
     
     # Rating Statistics
     path('users/ratings/', UserRatingStatsView.as_view(), name='user_ratings'),

@@ -11,7 +11,7 @@ from .serializers import (
 )
 from apps.jobs.models import JobApplication
 from apps.jobs.serializers import JobApplicationSerializer
-from core.utils import IsWorker
+from core.utils import IsWorker, IsClient
 from django.core.mail import send_mail
 from django.contrib.auth import get_user_model
 from .permissions import RoleBasedPermission
@@ -21,6 +21,9 @@ from twilio.rest import Client as TwilioClient
 from django.conf import settings
 import random
 import logging
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from django.db.models import Q
 
 User = get_user_model()
 logger = logging.getLogger('django')
@@ -575,3 +578,116 @@ class RecentReviewsView(APIView):
                 {"error": "User not found"}, 
                 status=status.HTTP_404_NOT_FOUND
             )
+
+class PaymentPreferenceView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_description="Get or update payment method preference",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'payment_method': openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    enum=['cash', 'chapa'],
+                    description='Preferred payment method'
+                )
+            }
+        ),
+        responses={
+            200: openapi.Response(
+                description='Payment preference updated',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'payment_method': openapi.Schema(type=openapi.TYPE_STRING)
+                    }
+                )
+            ),
+            400: 'Bad Request',
+            401: 'Unauthorized'
+        }
+    )
+    def put(self, request):
+        payment_method = request.data.get('payment_method')
+        if payment_method not in ['cash', 'chapa']:
+            return Response(
+                {"error": "Invalid payment method. Must be 'cash' or 'chapa'"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if request.user.is_client:
+            request.user.client.payment_method_preference = payment_method
+            request.user.client.save()
+        elif request.user.is_worker:
+            request.user.worker.payment_method_preference = payment_method
+            request.user.worker.save()
+        else:
+            return Response(
+                {"error": "User must be either client or worker"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return Response({"payment_method": payment_method})
+
+    def get(self, request):
+        if request.user.is_client:
+            preference = request.user.client.payment_method_preference
+        elif request.user.is_worker:
+            preference = request.user.worker.payment_method_preference
+        else:
+            return Response(
+                {"error": "User must be either client or worker"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return Response({"payment_method": preference})
+
+class WorkersByPaymentMethodView(APIView):
+    permission_classes = [IsAuthenticated, IsClient]
+
+    @swagger_auto_schema(
+        operation_description="Get workers filtered by payment method preference",
+        responses={
+            200: openapi.Response(
+                description='List of workers with matching payment preference',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=WorkerProfileSerializer
+                )
+            ),
+            401: 'Unauthorized',
+            403: 'Forbidden'
+        }
+    )
+    def get(self, request):
+        client_preference = request.user.client.payment_method_preference
+        workers = Worker.objects.filter(payment_method_preference=client_preference)
+        serializer = WorkerProfileSerializer(workers, many=True, context={'request': request})
+        return Response(serializer.data)
+
+class JobsByPaymentMethodView(APIView):
+    permission_classes = [IsAuthenticated, IsWorker]
+
+    @swagger_auto_schema(
+        operation_description="Get jobs filtered by payment method preference",
+        responses={
+            200: openapi.Response(
+                description='List of jobs with matching payment preference',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=JobSerializer
+                )
+            ),
+            401: 'Unauthorized',
+            403: 'Forbidden'
+        }
+    )
+    def get(self, request):
+        worker_preference = request.user.worker.payment_method_preference
+        jobs = Job.objects.filter(
+            status='open',
+            client__payment_method_preference=worker_preference
+        )
+        serializer = JobSerializer(jobs, many=True)
+        return Response(serializer.data)
