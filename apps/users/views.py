@@ -10,7 +10,7 @@ from .serializers import (
     ClientProfileSerializer, UserSerializer, WorkerProfileSerializer, FeedbackSerializer
 )
 from apps.jobs.models import JobApplication
-from apps.jobs.serializers import JobApplicationSerializer
+from apps.jobs.serializers import JobApplicationSerializer, JobSerializer
 from core.utils import IsWorker, IsClient
 from django.core.mail import send_mail
 from django.contrib.auth import get_user_model
@@ -410,7 +410,22 @@ class UserApplicationsView(APIView):
     @swagger_auto_schema(
         operation_description="List all applications submitted by the worker.",
         responses={
-            200: JobApplicationSerializer(many=True),
+            200: openapi.Response(
+                description='List of applications',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        properties={
+                            'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'job': openapi.Schema(type=openapi.TYPE_OBJECT),
+                            'worker': openapi.Schema(type=openapi.TYPE_OBJECT),
+                            'status': openapi.Schema(type=openapi.TYPE_STRING),
+                            'applied_at': openapi.Schema(type=openapi.TYPE_STRING, format='date-time')
+                        }
+                    )
+                )
+            ),
             401: openapi.Response(
                 description='Unauthorized',
                 schema=openapi.Schema(type=openapi.TYPE_OBJECT, properties={'detail': openapi.Schema(type=openapi.TYPE_STRING)})
@@ -653,7 +668,26 @@ class WorkersByPaymentMethodView(APIView):
                 description='List of workers with matching payment preference',
                 schema=openapi.Schema(
                     type=openapi.TYPE_ARRAY,
-                    items=WorkerProfileSerializer
+                    items=openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        properties={
+                            'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'user': openapi.Schema(
+                                type=openapi.TYPE_OBJECT,
+                                properties={
+                                    'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                                    'username': openapi.Schema(type=openapi.TYPE_STRING),
+                                    'first_name': openapi.Schema(type=openapi.TYPE_STRING),
+                                    'last_name': openapi.Schema(type=openapi.TYPE_STRING),
+                                    'email': openapi.Schema(type=openapi.TYPE_STRING),
+                                    'phone_number': openapi.Schema(type=openapi.TYPE_STRING)
+                                }
+                            ),
+                            'profile_pic': openapi.Schema(type=openapi.TYPE_STRING, format='uri'),
+                            'location': openapi.Schema(type=openapi.TYPE_STRING),
+                            'payment_method_preference': openapi.Schema(type=openapi.TYPE_STRING)
+                        }
+                    )
                 )
             ),
             401: 'Unauthorized',
@@ -676,7 +710,19 @@ class JobsByPaymentMethodView(APIView):
                 description='List of jobs with matching payment preference',
                 schema=openapi.Schema(
                     type=openapi.TYPE_ARRAY,
-                    items=JobSerializer
+                    items=openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        properties={
+                            'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'title': openapi.Schema(type=openapi.TYPE_STRING),
+                            'location': openapi.Schema(type=openapi.TYPE_STRING),
+                            'skills': openapi.Schema(type=openapi.TYPE_STRING),
+                            'description': openapi.Schema(type=openapi.TYPE_STRING),
+                            'payment_method': openapi.Schema(type=openapi.TYPE_STRING),
+                            'status': openapi.Schema(type=openapi.TYPE_STRING),
+                            'created_at': openapi.Schema(type=openapi.TYPE_STRING, format='date-time')
+                        }
+                    )
                 )
             ),
             401: 'Unauthorized',

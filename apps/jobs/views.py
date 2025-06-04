@@ -125,8 +125,29 @@ class JobListView(APIView):
     permission_classes = [IsAuthenticated, IsClient]
 
     @swagger_auto_schema(
-        operation_description="List all jobs posted by the authenticated client.",
-        responses={200: JobSerializer(many=True), 401: 'Unauthorized', 403: 'Forbidden'}
+        operation_description="List all jobs",
+        responses={
+            200: openapi.Response(
+                description='List of jobs',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        properties={
+                            'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'title': openapi.Schema(type=openapi.TYPE_STRING),
+                            'location': openapi.Schema(type=openapi.TYPE_STRING),
+                            'skills': openapi.Schema(type=openapi.TYPE_STRING),
+                            'description': openapi.Schema(type=openapi.TYPE_STRING),
+                            'payment_method': openapi.Schema(type=openapi.TYPE_STRING),
+                            'status': openapi.Schema(type=openapi.TYPE_STRING),
+                            'created_at': openapi.Schema(type=openapi.TYPE_STRING, format='date-time')
+                        }
+                    )
+                )
+            ),
+            401: 'Unauthorized'
+        }
     )
     def get(self, request):  
         queryset = Job.objects.filter(client=self.request.user)
@@ -257,8 +278,29 @@ class OpenJobListView(APIView):
     permission_classes = [IsAuthenticated, IsWorker]
 
     @swagger_auto_schema(
-        operation_description="List all open jobs for workers.",
-        responses={200: JobSerializer(many=True), 401: 'Unauthorized', 403: 'Forbidden'}
+        operation_description="List all open jobs",
+        responses={
+            200: openapi.Response(
+                description='List of open jobs',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        properties={
+                            'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'title': openapi.Schema(type=openapi.TYPE_STRING),
+                            'location': openapi.Schema(type=openapi.TYPE_STRING),
+                            'skills': openapi.Schema(type=openapi.TYPE_STRING),
+                            'description': openapi.Schema(type=openapi.TYPE_STRING),
+                            'payment_method': openapi.Schema(type=openapi.TYPE_STRING),
+                            'status': openapi.Schema(type=openapi.TYPE_STRING),
+                            'created_at': openapi.Schema(type=openapi.TYPE_STRING, format='date-time')
+                        }
+                    )
+                )
+            ),
+            401: 'Unauthorized'
+        }
     )
     def get(self, request):
         jobs = Job.objects.filter(status='open')
