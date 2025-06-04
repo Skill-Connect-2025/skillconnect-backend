@@ -8,7 +8,7 @@ from .models import Job, JobApplication, JobRequest, Feedback, PaymentRequest, T
 from .serializers import (
     JobSerializer, JobApplicationSerializer, JobRequestSerializer,
     PaymentRequestSerializer, FeedbackSerializer, JobRequestResponseSerializer,
-    JobStatusUpdateSerializer
+    JobStatusUpdateSerializer, ClientFeedbackSerializer, JobRequestResponseSerializer
 )
 from core.utils import IsClient, IsWorker
 from .utils import initialize_payment, verify_payment
@@ -1035,5 +1035,79 @@ class PaymentCallbackView(APIView):
             logger.error(f'Transaction not found for tx_ref: {tx_ref}')
             return Response(
                 {'error': 'Transaction not found'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+class JobReviewsView(APIView):
+    permission_classes = [IsAuthenticated]
+    @swagger_auto_schema(
+        operation_description="Get all reviews for a specific job.",
+        responses={
+            200: openapi.Response(
+                description='List of reviews',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'worker_feedback': openapi.Schema(
+                            type=openapi.TYPE_OBJECT,
+                            properties={
+                                'rating': openapi.Schema(type=openapi.TYPE_INTEGER),
+                                'review': openapi.Schema(type=openapi.TYPE_STRING),
+                                'created_at': openapi.Schema(type=openapi.TYPE_STRING),
+                            }
+                        ),
+                        'client_feedback': openapi.Schema(
+                            type=openapi.TYPE_OBJECT,
+                            properties={
+                                'rating': openapi.Schema(type=openapi.TYPE_INTEGER),
+                                'review': openapi.Schema(type=openapi.TYPE_STRING),
+                                'created_at': openapi.Schema(type=openapi.TYPE_STRING),
+                            }
+                        )
+                    }
+                )
+            ),
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def get(self, request, job_id):
+        try:
+            job = Job.objects.get(id=job_id)
+            
+            # Check if user has permission to view reviews
+            if not (request.user == job.client or 
+                   (job.assigned_worker and request.user == job.assigned_worker.user)):
+                return Response(
+                    {"error": "Not authorized to view these reviews"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            reviews = {
+                'worker_feedback': None,
+                'client_feedback': None
+            }
+            
+            # Get worker feedback if exists
+            if hasattr(job, 'feedback'):
+                reviews['worker_feedback'] = {
+                    'rating': job.feedback.rating,
+                    'review': job.feedback.review,
+                    'created_at': job.feedback.created_at
+                }
+            
+            # Get client feedback if exists
+            if hasattr(job, 'client_feedback'):
+                reviews['client_feedback'] = {
+                    'rating': job.client_feedback.rating,
+                    'review': job.client_feedback.review,
+                    'created_at': job.client_feedback.created_at
+                }
+            
+            return Response(reviews, status=status.HTTP_200_OK)
+        except Job.DoesNotExist:
+            return Response(
+                {"error": "Job not found"},
                 status=status.HTTP_404_NOT_FOUND
             )

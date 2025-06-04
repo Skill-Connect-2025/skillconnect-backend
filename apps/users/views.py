@@ -7,7 +7,7 @@ from drf_yasg import openapi
 from .serializers import (
     SelectSignupMethodSerializer, SignupRequestSerializer, VerifyAndCompleteSerializer,
     LoginSerializer, PasswordResetRequestSerializer, PasswordResetConfirmSerializer,
-    ClientProfileSerializer, UserSerializer, WorkerProfileSerializer
+    ClientProfileSerializer, UserSerializer, WorkerProfileSerializer, FeedbackSerializer
 )
 from apps.jobs.models import JobApplication
 from apps.jobs.serializers import JobApplicationSerializer
@@ -422,3 +422,156 @@ class UserApplicationsView(APIView):
         applications = JobApplication.objects.filter(worker=request.user.worker)
         serializer = JobApplicationSerializer(applications, many=True)
         return Response(serializer.data)
+
+class UserRatingStatsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_description="Get rating statistics for a user (worker or client).",
+        responses={
+            200: openapi.Response(
+                description='Rating statistics',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'average_rating': openapi.Schema(type=openapi.TYPE_NUMBER),
+                        'total_ratings': openapi.Schema(type=openapi.TYPE_INTEGER),
+                        'rating_breakdown': openapi.Schema(
+                            type=openapi.TYPE_OBJECT,
+                            properties={
+                                '5_star': openapi.Schema(type=openapi.TYPE_NUMBER),
+                                '4_star': openapi.Schema(type=openapi.TYPE_NUMBER),
+                                '3_star': openapi.Schema(type=openapi.TYPE_NUMBER),
+                                '2_star': openapi.Schema(type=openapi.TYPE_NUMBER),
+                                '1_star': openapi.Schema(type=openapi.TYPE_NUMBER),
+                            }
+                        )
+                    }
+                )
+            ),
+            401: 'Unauthorized',
+            404: 'Not Found'
+        }
+    )
+    def get(self, request, user_id=None):
+        try:
+            # If no user_id provided, return stats for the authenticated user
+            if user_id is None:
+                user = request.user
+            else:
+                user = User.objects.get(id=user_id)
+            
+            stats = user.get_rating_stats()
+            return Response(stats, status=status.HTTP_200_OK)
+        except User.DoesNotExist:
+            return Response(
+                {"error": "User not found"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+class UserReviewsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_description="Get all reviews for a user (worker or client).",
+        responses={
+            200: openapi.Response(
+                description='List of reviews',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        properties={
+                            'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'job': openapi.Schema(type=openapi.TYPE_OBJECT),
+                            'rating': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'review': openapi.Schema(type=openapi.TYPE_STRING),
+                            'created_at': openapi.Schema(type=openapi.TYPE_STRING),
+                            'reviewer': openapi.Schema(type=openapi.TYPE_OBJECT),
+                        }
+                    )
+                )
+            ),
+            401: 'Unauthorized',
+            404: 'Not Found'
+        }
+    )
+    def get(self, request, user_id=None):
+        try:
+            if user_id is None:
+                user = request.user
+            else:
+                user = User.objects.get(id=user_id)
+            
+            reviews = []
+            if user.is_worker:
+                # Get feedback from clients
+                reviews.extend(user.worker.feedback.all())
+                # Get feedback from workers (as client)
+                reviews.extend(user.received_feedback.all())
+            elif user.is_client:
+                # Get feedback from workers
+                reviews.extend(user.received_feedback.all())
+            
+            serializer = FeedbackSerializer(reviews, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except User.DoesNotExist:
+            return Response(
+                {"error": "User not found"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+class RecentReviewsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_description="Get recent reviews for a user (worker or client).",
+        responses={
+            200: openapi.Response(
+                description='List of recent reviews',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        properties={
+                            'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'job': openapi.Schema(type=openapi.TYPE_OBJECT),
+                            'rating': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'review': openapi.Schema(type=openapi.TYPE_STRING),
+                            'created_at': openapi.Schema(type=openapi.TYPE_STRING),
+                            'reviewer': openapi.Schema(type=openapi.TYPE_OBJECT),
+                        }
+                    )
+                )
+            ),
+            401: 'Unauthorized',
+            404: 'Not Found'
+        }
+    )
+    def get(self, request, user_id=None):
+        try:
+            if user_id is None:
+                user = request.user
+            else:
+                user = User.objects.get(id=user_id)
+            
+            reviews = []
+            if user.is_worker:
+                # Get feedback from clients
+                reviews.extend(user.worker.feedback.all())
+                # Get feedback from workers (as client)
+                reviews.extend(user.received_feedback.all())
+            elif user.is_client:
+                # Get feedback from workers
+                reviews.extend(user.received_feedback.all())
+            
+            # Sort by created_at and limit to 5 most recent
+            reviews = sorted(reviews, key=lambda x: x.created_at, reverse=True)[:5]
+            
+            serializer = FeedbackSerializer(reviews, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except User.DoesNotExist:
+            return Response(
+                {"error": "User not found"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )

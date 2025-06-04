@@ -3,7 +3,8 @@ from rest_framework.authtoken.views import obtain_auth_token
 from .views import (
     AuthLoginView, AuthSignupInitiateView, AuthSignupRequestCodeView,
     AuthSignupCompleteView, AuthPasswordResetView, AuthPasswordResetConfirmView,
-    UserProfileView, UserProfileClientView, UserProfileWorkerView, UserApplicationsView
+    UserProfileView, UserProfileClientView, UserProfileWorkerView, UserApplicationsView,
+    UserRatingStatsView, UserReviewsView, RecentReviewsView
 )
 
 urlpatterns = [
@@ -22,4 +23,14 @@ urlpatterns = [
     path('users/profile/client/', UserProfileClientView.as_view(), name='user_profile_client'),
     path('users/profile/worker/', UserProfileWorkerView.as_view(), name='user_profile_worker'),
     path('users/my-applications/', UserApplicationsView.as_view(), name='user_my_applications'),
+    
+    # Rating Statistics
+    path('users/ratings/', UserRatingStatsView.as_view(), name='user_ratings'),
+    path('users/<int:user_id>/ratings/', UserRatingStatsView.as_view(), name='user_ratings_by_id'),
+    
+    # Reviews
+    path('users/reviews/', UserReviewsView.as_view(), name='user_reviews'),
+    path('users/<int:user_id>/reviews/', UserReviewsView.as_view(), name='user_reviews_by_id'),
+    path('users/reviews/recent/', RecentReviewsView.as_view(), name='user_recent_reviews'),
+    path('users/<int:user_id>/reviews/recent/', RecentReviewsView.as_view(), name='user_recent_reviews_by_id'),
 ]
