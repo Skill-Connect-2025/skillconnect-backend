@@ -1,8 +1,9 @@
 from django.db import models
 from django.conf import settings
-from core.constants import JOB_STATUS_CHOICES, PAYMENT_METHOD_CHOICES
+from core.constants import JOB_STATUS_CHOICES, JOB_APPLICATION_STATUS_CHOICES, PAYMENT_METHOD_CHOICES, JOB_REQUEST_STATUS_CHOICES
 from apps.users.models import Worker
 from django.contrib.auth.models import User
+
 class Category(models.Model):
     name = models.CharField(max_length=100, unique=True)
 
@@ -46,16 +47,31 @@ class JobApplication(models.Model):
     def __str__(self):
         return f"{self.worker.user.username} applied to {self.job.title}"
 
-class JobRequest(models.Model):
-    application = models.ForeignKey(JobApplication, on_delete=models.CASCADE, related_name='requests')
-    status = models.CharField(max_length=20, choices= JOB_STATUS_CHOICES, default='pending')
+class ClientFeedback(models.Model):
+    job = models.OneToOneField(Job, on_delete=models.CASCADE, related_name='client_feedback')
+    worker = models.ForeignKey(Worker, on_delete=models.CASCADE, related_name='client_feedback')
+    client = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='received_feedback')
+    rating = models.IntegerField(choices=[(i, i) for i in range(1, 6)])  # 1 to 5 stars
+    review = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ('application',)
+        unique_together = ('job', 'worker', 'client')
 
     def __str__(self):
-        return f"Request for {self.application.worker.user.username} on {self.application.job.title}"
+        return f"Feedback for {self.client.username} on {self.job.title} ({self.rating}/5)"
+
+class JobRequest(models.Model):
+    job = models.ForeignKey(Job, on_delete=models.CASCADE, related_name='requests')
+    worker = models.ForeignKey(Worker, on_delete=models.CASCADE, related_name='job_requests')
+    status = models.CharField(max_length=20, choices=JOB_REQUEST_STATUS_CHOICES, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('job', 'worker')
+
+    def __str__(self):
+        return f"Request for {self.worker.user.username} on {self.job.title}"
 
 class PaymentRequest(models.Model):
     job = models.OneToOneField(Job, on_delete=models.CASCADE, related_name='payment_request')

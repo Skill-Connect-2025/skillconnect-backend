@@ -321,7 +321,7 @@ class UserSerializer(serializers.ModelSerializer):
     email = serializers.SerializerMethodField()
     phone_number = serializers.SerializerMethodField()
     feedback = serializers.SerializerMethodField()
-    average_rating = serializers.SerializerMethodField()
+    rating_stats = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -329,7 +329,7 @@ class UserSerializer(serializers.ModelSerializer):
             'id', 'username', 'first_name', 'last_name',
             'role', 'profile_pic', 'location', 'birthdate', 'nationality', 'gender',
             'has_experience', 'years_of_experience', 'educations', 'skills', 'target_jobs',
-            'email', 'phone_number', 'feedback', 'average_rating'
+            'email', 'phone_number', 'feedback', 'rating_stats'
         ]
 
     def get_role(self, obj):
@@ -433,13 +433,8 @@ class UserSerializer(serializers.ModelSerializer):
             return FeedbackSerializer(obj.worker.feedback.all(), many=True).data
         return []
 
-    def get_average_rating(self, obj):
-        if obj.is_worker:
-            feedback = obj.worker.feedback.all()
-            if feedback.exists():
-                return round(sum(f.rating for f in feedback) / feedback.count(), 1)
-            return 0.0
-        return None
+    def get_rating_stats(self, obj):
+        return obj.get_rating_stats()
 
 class ClientProfileSerializer(serializers.ModelSerializer):
     class Meta:
@@ -477,7 +472,7 @@ class WorkerProfileSerializer(serializers.Serializer):
     years_of_experience = serializers.FloatField(read_only=True)
     last_activity = serializers.DateTimeField(read_only=True)
     feedback = serializers.SerializerMethodField(read_only=True)
-    average_rating = serializers.SerializerMethodField(read_only=True)
+    rating_stats = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         ref_name = 'UsersWorkerProfile' 
@@ -485,12 +480,8 @@ class WorkerProfileSerializer(serializers.Serializer):
     def get_feedback(self, obj):
         return FeedbackSerializer(obj.feedback.all(), many=True).data
 
-    def get_average_rating(self, obj):
-        feedback = obj.feedback.all()
-        if feedback.exists():
-            return round(sum(f.rating for f in feedback) / feedback.count(), 1)
-        return 0.0
-    
+    def get_rating_stats(self, obj):
+        return obj.user.get_rating_stats()
 
     def validate(self, data):
         try:

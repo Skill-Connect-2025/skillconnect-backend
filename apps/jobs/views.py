@@ -177,14 +177,40 @@ class JobUpdateView(APIView):
             404: 'Not Found'
         }
     )
-    def put(self, request, id):  
+    def put(self, request, id):
         try:
             job = Job.objects.get(pk=id, client=request.user)
         except Job.DoesNotExist:
             return Response({"error": "Job not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Store old data for comparison
+        old_title = job.title
+        old_location = job.location
+        old_description = job.description
+        
         serializer = JobSerializer(job, data=request.data, partial=True)
         if serializer.is_valid():
-            serializer.save()
+            updated_job = serializer.save()
+            
+            # Notify assigned worker if any and if significant changes were made
+            if job.assigned_worker and (
+                old_title != updated_job.title or
+                old_location != updated_job.location or
+                old_description != updated_job.description
+            ):
+                email_subject = f"Job Updated: {updated_job.title}"
+                email_message = (
+                    f"Dear {job.assigned_worker.user.first_name},\n\n"
+                    f"The job '{updated_job.title}' has been updated by the client.\n"
+                    f"Updated Details:\n"
+                    f"- Title: {updated_job.title}\n"
+                    f"- Location: {updated_job.location}\n"
+                    f"- Description: {updated_job.description}\n\n"
+                    f"Best regards,\nSkillConnect Team"
+                )
+                sms_message = f"Job '{updated_job.title}' has been updated. Please check the new details."
+                send_notification(job.assigned_worker.user, email_subject, email_message, sms_message)
+            
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -205,6 +231,25 @@ class JobDeleteView(APIView):
             job = Job.objects.get(pk=pk, client=request.user)
         except Job.DoesNotExist:
             return Response({"error": "Job not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Store worker info before deletion for notification
+        assigned_worker = job.assigned_worker
+        
+        # Notify assigned worker if any
+        if assigned_worker:
+            email_subject = f"Job Cancelled: {job.title}"
+            email_message = (
+                f"Dear {assigned_worker.user.first_name},\n\n"
+                f"The job '{job.title}' has been cancelled by the client.\n"
+                f"Job Details:\n"
+                f"- Title: {job.title}\n"
+                f"- Location: {job.location}\n"
+                f"- Description: {job.description}\n\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            sms_message = f"Job '{job.title}' has been cancelled by the client."
+            send_notification(assigned_worker.user, email_subject, email_message, sms_message)
+        
         job.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -224,13 +269,18 @@ class JobApplicationView(APIView):
     permission_classes = [IsAuthenticated, IsWorker]
 
     @swagger_auto_schema(
-        operation_description="Apply to an open job.",
+        operation_description="Apply to an open job or withdraw an existing application.",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
             properties={
                 'worker_id': openapi.Schema(
                     type=openapi.TYPE_INTEGER,
                     description='Worker ID (ignored, auto-set to current user)'
+                ),
+                'action': openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    enum=['apply', 'withdraw'],
+                    description='Action to perform'
                 )
             }
         ),
@@ -245,13 +295,39 @@ class JobApplicationView(APIView):
             404: openapi.Response('Not Found')
         }
     )
-    def post(self, request, id): 
+    def post(self, request, id):
         try:
             job = Job.objects.get(pk=id)
         except Job.DoesNotExist:
             logger.error(f"Job {id} not found for application")
             return Response({"error": "Job not found"}, status=status.HTTP_404_NOT_FOUND)
         
+        action = request.data.get('action', 'apply')
+        
+        if action == 'withdraw':
+            try:
+                application = JobApplication.objects.get(
+                    job=job,
+                    worker=request.user.worker,
+                    status='pending'
+                )
+                application.delete()
+                
+                # Notify client about withdrawal
+                email_subject = f"Application Withdrawn: {job.title}"
+                email_message = (
+                    f"Dear {job.client.first_name},\n\n"
+                    f"Worker {request.user.first_name} {request.user.last_name} has withdrawn their application for job: {job.title}.\n\n"
+                    f"Best regards,\nSkillConnect Team"
+                )
+                sms_message = f"Worker {request.user.first_name} has withdrawn their application for job: {job.title}."
+                send_notification(job.client, email_subject, email_message, sms_message)
+                
+                return Response(status=status.HTTP_204_NO_CONTENT)
+            except JobApplication.DoesNotExist:
+                return Response({"error": "No pending application found"}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Handle new application
         data = {
             'job': job.id,
             'worker_id': request.user.worker.id
@@ -313,12 +389,12 @@ class JobRequestView(APIView):
     permission_classes = [IsAuthenticated, IsClient]
 
     @swagger_auto_schema(
-        operation_description="Send a request to a worker for a job application.",
+        operation_description="Send a request to a recommended worker for a job.",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
-            required=['application_id'],
+            required=['worker_id'],
             properties={
-                'application_id': openapi.Schema(type=openapi.TYPE_INTEGER, description='Application ID')
+                'worker_id': openapi.Schema(type=openapi.TYPE_INTEGER, description='Worker ID')
             },
         ),
         responses={
@@ -334,14 +410,17 @@ class JobRequestView(APIView):
             job = Job.objects.get(pk=id, client=request.user)
         except Job.DoesNotExist:
             return Response({"error": "Job not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
+        
         data = request.data.copy()
-        data['application_id'] = data.get('application_id')
-        serializer = JobRequestSerializer(data=data, context={'request': request, 'job_id': id})
+        data['job'] = job.id
+        serializer = JobRequestSerializer(data=data, context={'request': request, 'job': job})
+        
         if serializer.is_valid():
             request_obj = serializer.save()
-            worker = request_obj.application.worker.user
+            worker = request_obj.worker.user
             client = request.user
-            # Notify worker (without contact info)
+            
+            # Notify worker
             email_subject = f"New Job Request for {job.title}"
             email_message = (
                 f"Dear {worker.first_name} {worker.last_name},\n\n"
@@ -358,26 +437,126 @@ class JobRequestView(APIView):
                 f"Log in to SkillConnect to respond."
             )
             send_notification(worker, email_subject, email_message, sms_message)
-            # Notify client (without contact info)
-            email_subject = f"Job Request Sent for {job.title}"
-            email_message = (
-                f"Dear {client.first_name} {client.last_name},\n\n"
-                f"Your request for the job '{job.title}' has been successfully sent to {worker.first_name} {worker.last_name}.\n"
-                f"Job Details:\n"
-                f"- Title: {job.title}\n"
-                f"- Location: {job.location}\n"
-                f"- Description: {job.description}\n\n"
-                f"You will be notified once the worker responds.\n\n"
-                f"Best regards,\nSkillConnect Team"
-            )
-            sms_message = (
-                f"Your request for '{job.title}' has been sent to {worker.first_name} {worker.last_name}. "
-                f"Await their response on SkillConnect."
-            )
-            send_notification(client, email_subject, email_message, sms_message)
+            
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+class JobApplicationResponseView(APIView):
+    permission_classes = [IsAuthenticated, IsClient]
+
+    @swagger_auto_schema(
+        operation_description="Accept or reject a worker's application.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['status'],
+            properties={
+                'status': openapi.Schema(type=openapi.TYPE_STRING, enum=['accepted', 'rejected'])
+            },
+        ),
+        responses={
+            200: JobApplicationSerializer,
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def post(self, request, job_id, application_id):
+        try:
+            job = Job.objects.get(pk=job_id, client=request.user)
+            application = JobApplication.objects.get(pk=application_id, job=job)
+        except (Job.DoesNotExist, JobApplication.DoesNotExist):
+            return Response({"error": "Job or application not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if application.status != 'pending':
+            return Response({"error": "Application has already been processed"}, status=status.HTTP_400_BAD_REQUEST)
+
+        status = request.data.get('status')
+        if status not in ['accepted', 'rejected']:
+            return Response({"error": "Invalid status"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if status == 'accepted':
+            if job.assigned_worker:
+                return Response({"error": "Job already has an assigned worker"}, status=status.HTTP_400_BAD_REQUEST)
+            job.assigned_worker = application.worker
+            job.status = 'in_progress'
+            job.save()
+
+            # Notify worker
+            email_subject = f"Application Accepted for {job.title}"
+            email_message = (
+                f"Dear {application.worker.user.first_name},\n\n"
+                f"Your application for job '{job.title}' has been accepted.\n"
+                f"Contact the client at:\n"
+                f"- Email: {job.client.email}\n"
+                f"- Phone: {job.client.phone_number or 'Not provided'}\n\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            sms_message = f"Your application for '{job.title}' was accepted. Contact client for details."
+            send_notification(application.worker.user, email_subject, email_message, sms_message)
+
+        application.status = status
+        application.save()
+
+        serializer = JobApplicationSerializer(application)
+        return Response(serializer.data)
+
+class ClientFeedbackView(APIView):
+    permission_classes = [IsAuthenticated, IsWorker]
+
+    @swagger_auto_schema(
+        operation_description="Submit feedback for a client after job completion.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['rating'],
+            properties={
+                'rating': openapi.Schema(type=openapi.TYPE_INTEGER, minimum=1, maximum=5),
+                'review': openapi.Schema(type=openapi.TYPE_STRING, nullable=True),
+            },
+        ),
+        responses={
+            201: ClientFeedbackSerializer,
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def post(self, request, job_id):
+        try:
+            job = Job.objects.get(pk=job_id)
+            if job.assigned_worker != request.user.worker:
+                return Response({"error": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
+        except Job.DoesNotExist:
+            return Response({"error": "Job not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = ClientFeedbackSerializer(
+            data=request.data,
+            context={'request': request, 'job': job, 'worker': request.user.worker}
+        )
+        
+        if serializer.is_valid():
+            feedback = serializer.save()
+            
+            # If both client and worker have submitted feedback, close the job
+            if hasattr(job, 'feedback') and hasattr(job, 'client_feedback'):
+                job.status = 'closed'
+                job.save()
+
+            # Notify client
+            email_subject = f"New Feedback for Job: {job.title}"
+            email_message = (
+                f"Dear {job.client.first_name},\n\n"
+                f"Worker {request.user.first_name} has submitted feedback for job: {job.title}.\n"
+                f"Rating: {feedback.rating}/5\n"
+                f"Review: {feedback.review or 'No review provided'}\n\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            sms_message = f"New feedback for job: {job.title}. Rating: {feedback.rating}/5."
+            send_notification(job.client, email_subject, email_message, sms_message)
+
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class JobRequestResponseView(APIView):
     permission_classes = [IsAuthenticated, IsWorker]
@@ -603,6 +782,7 @@ class JobFeedbackView(APIView):
             send_notification(job.assigned_worker.user, email_subject, email_message, sms_message)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 class WorkerJobRequestsView(APIView):
     permission_classes = [IsAuthenticated, IsWorker]
 

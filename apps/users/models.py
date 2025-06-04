@@ -23,6 +23,64 @@ class User(AbstractUser):
             models.Q(email=identifier) | models.Q(phone_number=identifier)
         ).first()
 
+    def get_rating_stats(self):
+        """Get rating statistics for both workers and clients"""
+        stats = {
+            'average_rating': 0.0,
+            'total_ratings': 0,
+            'rating_breakdown': {
+                '5_star': 0,
+                '4_star': 0,
+                '3_star': 0,
+                '2_star': 0,
+                '1_star': 0
+            }
+        }
+
+        if self.is_worker:
+            # Get worker feedback
+            feedback = self.worker.feedback.all()
+            client_feedback = self.worker.client_feedback.all()
+            
+            # Combine both types of feedback
+            all_ratings = list(feedback.values_list('rating', flat=True)) + \
+                         list(client_feedback.values_list('rating', flat=True))
+            
+            if all_ratings:
+                stats['total_ratings'] = len(all_ratings)
+                stats['average_rating'] = round(sum(all_ratings) / len(all_ratings), 1)
+                
+                # Calculate rating breakdown
+                for rating in all_ratings:
+                    stats['rating_breakdown'][f'{rating}_star'] += 1
+                
+                # Convert to percentages
+                for key in stats['rating_breakdown']:
+                    stats['rating_breakdown'][key] = round(
+                        (stats['rating_breakdown'][key] / stats['total_ratings']) * 100, 1
+                    )
+
+        elif self.is_client:
+            # Get client feedback
+            feedback = self.received_feedback.all()
+            
+            if feedback.exists():
+                all_ratings = list(feedback.values_list('rating', flat=True))
+                stats['total_ratings'] = len(all_ratings)
+                stats['average_rating'] = round(sum(all_ratings) / len(all_ratings), 1)
+                
+                # Calculate rating breakdown
+                for rating in all_ratings:
+                    stats['rating_breakdown'][f'{rating}_star'] += 1
+                
+                # Convert to percentages
+                for key in stats['rating_breakdown']:
+                    stats['rating_breakdown'][key] = round(
+                        (stats['rating_breakdown'][key] / stats['total_ratings']) * 100, 1
+                    )
+
+        return stats
+
 class Client(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='client')
     profile_pic = models.ImageField(upload_to='profile_pics/', blank=True, null=True)

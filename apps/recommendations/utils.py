@@ -1,5 +1,5 @@
 from apps.users.models import Worker
-from apps.jobs.models import Job
+from apps.jobs.models import Job, Feedback, ClientFeedback
 from .models import Embedding
 import logging
 from difflib import SequenceMatcher
@@ -7,6 +7,7 @@ import re
 import json
 from django.utils import timezone
 from datetime import timedelta
+from django.db.models import Avg
 
 
 logger = logging.getLogger(__name__)
@@ -24,18 +25,34 @@ class MatchEngine:
         return re.sub(r'\s+', ' ', s.lower().strip())
 
     @staticmethod
-    def compute_skill_similarity(job_skills, worker_skills):
-        """Compute skill similarity."""
-        job_skills_set = set(
-            MatchEngine.normalize_string(skill) for skill in job_skills.split(',')
-        )
-        worker_skills_set = set(
-            MatchEngine.normalize_string(skill.name) for skill in worker_skills
-        )
-        common_skills = job_skills_set.intersection(worker_skills_set)
-        total_skills = job_skills_set.union(worker_skills_set)
-        score = len(common_skills) / len(total_skills) if total_skills else 0
-        return score
+    def calculate_skill_match(job_skills, worker_skills):
+        job_skill_set = set(skill.lower().strip() for skill in job_skills.split(','))
+        worker_skill_set = set(skill.name.lower() for skill in worker_skills.all())
+        if not job_skill_set:
+            return 0.0
+        common_skills = job_skill_set.intersection(worker_skill_set)
+        return len(common_skills) / len(job_skill_set)
+
+    @staticmethod
+    def calculate_experience_score(worker):
+        if not worker.has_experience:
+            return 0.0
+        return min(worker.years_of_experience / 5, 1.0)  # Cap at 5 years
+
+    @staticmethod
+    def calculate_rating_score(worker):
+        # Calculate average rating from both worker and client feedback
+        worker_rating = Feedback.objects.filter(worker=worker).aggregate(Avg('rating'))['rating__avg'] or 0
+        client_rating = ClientFeedback.objects.filter(worker=worker).aggregate(Avg('rating'))['rating__avg'] or 0
+        
+        # If both ratings exist, take average; otherwise use available rating
+        if worker_rating and client_rating:
+            return (worker_rating + client_rating) / 10  # Normalize to 0-1
+        elif worker_rating:
+            return worker_rating / 5
+        elif client_rating:
+            return client_rating / 5
+        return 0.0
 
     @staticmethod
     def compute_target_job_similarity(job_category, worker_target_jobs):
@@ -48,16 +65,6 @@ class MatchEngine:
             if SequenceMatcher(None, job_category_name, target_job).ratio() > 0.8:
                 return 1.0
         return 0.0
-
-    @staticmethod
-    def compute_experience_score(job, worker):
-        """Estimate required experience from job skills/description."""
-        # Infer required years from skills complexity (simplified)
-        skill_count = len(job.skills.split(','))
-        required_years = min(5, skill_count * 2)  # e.g., 3 skills -> 6 years, capped at 5
-        actual_years = worker.years_of_experience or 0
-        score = min(actual_years / required_years, 1.0) if required_years > 0 else 0.5
-        return score
 
     @staticmethod
     def compute_education_score(job, worker_educations):
@@ -116,25 +123,25 @@ class MatchEngine:
                 )
                 cls.store_embedding('worker', worker.id, worker_text)
 
-                skill_score = cls.compute_skill_similarity(
-                    job.skills, worker.skills.all()
-                )
+                skill_score = cls.calculate_skill_match(job.skills, worker.skills)
                 target_job_score = cls.compute_target_job_similarity(
                     job.category, worker.target_jobs.all()
                 )
-                experience_score = cls.compute_experience_score(job, worker)
+                experience_score = cls.calculate_experience_score(worker)
                 education_score = cls.compute_education_score(
                     job, worker.educations.all()
                 )
                 location_score = cls.compute_location_similarity(
                     job.location, worker.location
                 )
+                rating_score = cls.calculate_rating_score(worker)
                 total_score = (
                     cls.SKILL_WEIGHT * skill_score +
                     cls.TARGET_JOB_WEIGHT * target_job_score +
                     cls.EXPERIENCE_WEIGHT * experience_score +
                     cls.EDUCATION_WEIGHT * education_score +
-                    cls.LOCATION_WEIGHT * location_score
+                    cls.LOCATION_WEIGHT * location_score +
+                    rating_score * 0.1
                 )
                 # Tie-breaker: Boost if has_experience and recent activity
                 if worker.has_experience:
@@ -148,7 +155,8 @@ class MatchEngine:
                     'target_job': target_job_score,
                     'experience': experience_score,
                     'education': education_score,
-                    'location': location_score
+                    'location': location_score,
+                    'rating': rating_score
                 }
                 results.append({
                     'worker': worker,
@@ -157,7 +165,7 @@ class MatchEngine:
                 })
             except Exception as e:
                 logger.error(f"Error matching job {job.id} to worker {worker.id}: {str(e)}")
-        return sorted(results, key=lambda x: x['score'], reverse=True)
+        return sorted(results, key=lambda x: x['score'], reverse=True)[:5]
 
     @classmethod
     def match_worker_to_jobs(cls, worker):
@@ -179,25 +187,25 @@ class MatchEngine:
                 job_text = f"{job.title} {job.skills} {job.description} {job.category.name}"
                 cls.store_embedding('job', job.id, job_text)
 
-                skill_score = cls.compute_skill_similarity(
-                    job.skills, worker.skills.all()
-                )
+                skill_score = cls.calculate_skill_match(job.skills, worker.skills)
                 target_job_score = cls.compute_target_job_similarity(
                     job.category, worker.target_jobs.all()
                 )
-                experience_score = cls.compute_experience_score(job, worker)
+                experience_score = cls.calculate_experience_score(worker)
                 education_score = cls.compute_education_score(
                     job, worker.educations.all()
                 )
                 location_score = cls.compute_location_similarity(
                     job.location, worker.location
                 )
+                rating_score = cls.calculate_rating_score(worker)
                 total_score = (
                     cls.SKILL_WEIGHT * skill_score +
                     cls.TARGET_JOB_WEIGHT * target_job_score +
                     cls.EXPERIENCE_WEIGHT * experience_score +
                     cls.EDUCATION_WEIGHT * education_score +
-                    cls.LOCATION_WEIGHT * location_score
+                    cls.LOCATION_WEIGHT * location_score +
+                    rating_score * 0.1
                 )
                 # Tie-breaker
                 if worker.has_experience:
@@ -211,7 +219,8 @@ class MatchEngine:
                     'target_job': target_job_score,
                     'experience': experience_score,
                     'education': education_score,
-                    'location': location_score
+                    'location': location_score,
+                    'rating': rating_score
                 }
                 results.append({
                     'job': job,
@@ -220,4 +229,4 @@ class MatchEngine:
                 })
             except Exception as e:
                 logger.error(f"Error matching worker {worker.id} to job {job.id}: {str(e)}")
-        return sorted(results, key=lambda x: x['score'], reverse=True)
+        return sorted(results, key=lambda x: x['score'], reverse=True)[:5]

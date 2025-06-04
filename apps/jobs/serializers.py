@@ -1,9 +1,9 @@
 from rest_framework import serializers
-from .models import Job, JobImage, Category, JobApplication, JobRequest, Feedback, PaymentRequest, Transaction
+from .models import Job, JobImage, Category, JobApplication, JobRequest, Feedback, PaymentRequest, Transaction, ClientFeedback
 from apps.users.models import Worker
 from .models import PaymentRequest
 from apps.users.serializers import UserSerializer
-from core.constants import JOB_STATUS_CHOICES, PAYMENT_METHOD_CHOICES
+from core.constants import JOB_STATUS_CHOICES, PAYMENT_METHOD_CHOICES, JOB_REQUEST_STATUS_CHOICES
 from .feedback_serializers import FeedbackSerializer
 import uuid
 import logging
@@ -69,29 +69,60 @@ class JobApplicationSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
 
+class ClientFeedbackSerializer(serializers.ModelSerializer):
+    rating = serializers.IntegerField(min_value=1, max_value=5)
+
+    class Meta:
+        model = ClientFeedback
+        fields = ['id', 'job', 'worker', 'client', 'rating', 'review', 'created_at']
+        read_only_fields = ['job', 'worker', 'client', 'created_at']
+
+    def validate(self, data):
+        job = self.context['job']
+        worker = self.context['worker']
+        if job.status != 'completed':
+            raise serializers.ValidationError("Cannot submit feedback for a non-completed job.")
+        if job.assigned_worker != worker:
+            raise serializers.ValidationError("Only the assigned worker can submit feedback.")
+        if ClientFeedback.objects.filter(job=job).exists():
+            raise serializers.ValidationError("Feedback already submitted for this job.")
+        return data
+
+    def create(self, validated_data):
+        job = self.context['job']
+        worker = self.context['worker']
+        return ClientFeedback.objects.create(
+            job=job,
+            worker=worker,
+            client=job.client,
+            rating=validated_data['rating'],
+            review=validated_data.get('review', '')
+        )
+
 class JobRequestSerializer(serializers.ModelSerializer):
-    application = JobApplicationSerializer(read_only=True)
-    application_id = serializers.PrimaryKeyRelatedField(
-        queryset=JobApplication.objects.all(), write_only=True, source='application'
+    worker = WorkerProfileSerializer(read_only=True)
+    worker_id = serializers.PrimaryKeyRelatedField(
+        queryset=Worker.objects.all(), write_only=True, source='worker'
     )
 
     class Meta:
         model = JobRequest
-        fields = ['id', 'application', 'application_id', 'status', 'created_at']
+        fields = ['id', 'job', 'worker', 'worker_id', 'status', 'created_at']
         read_only_fields = ['status', 'created_at']
 
     def validate(self, data):
-        application = data['application']
-        job = application.job
-        job_id = self.context.get('job_id')
-        if job_id and job.id != job_id:
-            raise serializers.ValidationError("The application does not belong to the specified job.")
+        job = self.context.get('job')
+        worker = data['worker']
+        
         if job.status != 'open':
             raise serializers.ValidationError("Cannot send request for a non-open job.")
-        if JobRequest.objects.filter(application=application).exists():
-            raise serializers.ValidationError("A request has already been sent for this application.")
+        
+        if JobRequest.objects.filter(job=job, worker=worker).exists():
+            raise serializers.ValidationError("A request has already been sent to this worker.")
+        
         if job.assigned_worker:
             raise serializers.ValidationError("This job already has an assigned worker.")
+        
         return data
 
 class JobRequestResponseSerializer(serializers.Serializer):
@@ -100,13 +131,11 @@ class JobRequestResponseSerializer(serializers.Serializer):
     def validate(self, data):
         job_request = self.context['job_request']
         
-        # Check if request is still pending
         if job_request.status != 'pending':
             raise serializers.ValidationError("This request has already been processed.")
         
-        # If accepting, check if job is still available
         if data['status'] == 'accepted':
-            job = job_request.application.job
+            job = job_request.job
             if job.status != 'open':
                 raise serializers.ValidationError("This job is no longer available.")
             if job.assigned_worker:
