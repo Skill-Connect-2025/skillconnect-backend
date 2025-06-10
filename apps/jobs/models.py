@@ -162,3 +162,49 @@ class JobCompletion(models.Model):
         if self.client_completed:
             self.job.status = 'completed'
             self.job.save()
+
+class Dispute(models.Model):
+    DISPUTE_STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('in_review', 'In Review'),
+        ('resolved', 'Resolved'),
+        ('closed', 'Closed')
+    ]
+
+    DISPUTE_TYPE_CHOICES = [
+        ('payment', 'Payment Issue'),
+        ('quality', 'Quality of Work'),
+        ('behavior', 'Behavior'),
+        ('other', 'Other')
+    ]
+
+    job = models.ForeignKey(Job, on_delete=models.CASCADE, related_name='disputes')
+    reported_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='reported_disputes')
+    reported_user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='disputes')
+    dispute_type = models.CharField(max_length=20, choices=DISPUTE_TYPE_CHOICES)
+    description = models.TextField()
+    status = models.CharField(max_length=20, choices=DISPUTE_STATUS_CHOICES, default='pending')
+    resolution = models.TextField(blank=True, null=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='resolved_disputes'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Dispute #{self.id} - {self.job.title}"
+
+    def mark_as_resolved(self, admin_user, resolution):
+        self.status = 'resolved'
+        self.resolution = resolution
+        self.resolved_by = admin_user
+        self.resolved_at = timezone.now()
+        self.save()

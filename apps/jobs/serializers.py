@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Job, JobImage, Category, JobApplication, JobRequest, Feedback, PaymentRequest, Transaction, ClientFeedback
+from .models import Job, JobImage, Category, JobApplication, JobRequest, Feedback, PaymentRequest, Transaction, ClientFeedback, Dispute
 from apps.users.models import Worker
 from .models import PaymentRequest
 from apps.users.serializers import UserSerializer
@@ -289,3 +289,48 @@ class TransactionSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("A pending transaction already exists for this job.")
 
         return data
+
+class DisputeSerializer(serializers.ModelSerializer):
+    reported_by = UserSerializer(read_only=True)
+    reported_user = UserSerializer(read_only=True)
+    resolved_by = UserSerializer(read_only=True)
+    job = JobSerializer(read_only=True)
+
+    class Meta:
+        model = Dispute
+        fields = [
+            'id', 'job', 'reported_by', 'reported_user', 'dispute_type',
+            'description', 'status', 'resolution', 'resolved_by',
+            'created_at', 'updated_at', 'resolved_at'
+        ]
+        read_only_fields = [
+            'id', 'reported_by', 'reported_user', 'status', 'resolution',
+            'resolved_by', 'created_at', 'updated_at', 'resolved_at'
+        ]
+
+    def validate(self, data):
+        job = self.context['job']
+        user = self.context['request'].user
+        reported_user = self.context['reported_user']
+
+        # Check if user is either client or worker of the job
+        if user != job.client and (not hasattr(user, 'worker') or user.worker != job.assigned_worker):
+            raise serializers.ValidationError("You can only report disputes for jobs you're involved in.")
+
+        # Check if reported user is the other party in the job
+        if reported_user != job.client and (not hasattr(reported_user, 'worker') or reported_user.worker != job.assigned_worker):
+            raise serializers.ValidationError("You can only report disputes against the other party in the job.")
+
+        # Check if there's already an active dispute for this job
+        if Dispute.objects.filter(job=job, status__in=['pending', 'in_review']).exists():
+            raise serializers.ValidationError("There is already an active dispute for this job.")
+
+        return data
+
+    def create(self, validated_data):
+        return Dispute.objects.create(
+            job=self.context['job'],
+            reported_by=self.context['request'].user,
+            reported_user=self.context['reported_user'],
+            **validated_data
+        )

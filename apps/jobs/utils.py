@@ -3,6 +3,9 @@ import uuid
 import logging
 import re
 from django.conf import settings
+from apps.management.models import ManagementLog
+from django.core.mail import send_mail
+from twilio.rest import TwilioClient
 
 logger = logging.getLogger(__name__)
 
@@ -77,3 +80,42 @@ def verify_payment(tx_ref):
     except requests.RequestException as e:
         logger.error(f'Chapa verification failed: {str(e)}')
         raise Exception(f'Verification failed: {str(e)}')
+
+def send_notification(user, subject, email_message, sms_message):
+    """
+    Send notifications to users via email and SMS.
+    
+    Args:
+        user: User object to send notification to
+        subject: Email subject
+        email_message: Email message content
+        sms_message: SMS message content
+    """
+    try:
+        # Send email if user has email
+        if user.email:
+            send_mail(
+                subject=subject,
+                message=email_message,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[user.email],
+                fail_silently=True
+            )
+            logger.info(f"Email notification sent to {user.email}")
+
+        # Send SMS if user has phone number
+        if user.phone_number:
+            try:
+                client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+                message = client.messages.create(
+                    body=sms_message,
+                    from_=settings.TWILIO_PHONE_NUMBER,
+                    to=user.phone_number
+                )
+                logger.info(f"SMS notification sent to {user.phone_number}")
+            except Exception as e:
+                logger.error(f"Failed to send SMS to {user.phone_number}: {str(e)}")
+
+    except Exception as e:
+        logger.error(f"Failed to send notification: {str(e)}")
+        raise

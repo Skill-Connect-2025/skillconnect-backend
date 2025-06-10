@@ -6,7 +6,9 @@ from .views import (
     JobPaymentRequestView, JobFeedbackView, ClientFeedbackView,
     PaymentCallbackView, WorkerJobRequestsView, ClientSentRequestsView, 
     PaymentConfirmView, JobApplicationResponseView, JobReviewsView,
-    ClientJobCompletionView, WorkerJobCompletionView
+    ClientJobCompletionView, WorkerJobCompletionView,
+    DisputeCreateView, DisputeListView, DisputeDetailView,
+    AdminDisputeListView, AdminDisputeResolveView
 )
 
 urlpatterns = [
@@ -32,4 +34,13 @@ urlpatterns = [
     path('jobs/<int:id>/payment-confirm/', PaymentConfirmView.as_view(), name='payment-confirm'),
     path('jobs/<int:job_id>/client-complete/', ClientJobCompletionView.as_view(), name='client_job_complete'),
     path('jobs/<int:job_id>/worker-complete/', WorkerJobCompletionView.as_view(), name='worker_job_complete'),
+    
+    # Dispute URLs
+    path('jobs/<int:job_id>/disputes/', DisputeCreateView.as_view(), name='create_dispute'),
+    path('disputes/', DisputeListView.as_view(), name='list_disputes'),
+    path('disputes/<int:dispute_id>/', DisputeDetailView.as_view(), name='dispute_detail'),
+    
+    # Admin Dispute URLs
+    path('admin/disputes/', AdminDisputeListView.as_view(), name='admin_list_disputes'),
+    path('admin/disputes/<int:dispute_id>/resolve/', AdminDisputeResolveView.as_view(), name='admin_resolve_dispute'),
 ]

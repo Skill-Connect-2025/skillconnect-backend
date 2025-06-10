@@ -4,14 +4,16 @@ from rest_framework import status, generics
 from rest_framework.permissions import IsAuthenticated
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
-from .models import Job, JobApplication, JobRequest, Feedback, PaymentRequest, Transaction, JobImage, Category, JobCompletion
+from .models import Job, JobApplication, JobRequest, Feedback, PaymentRequest, Transaction, JobImage, Category, JobCompletion, Dispute
 from .serializers import (
     JobSerializer, JobApplicationSerializer, JobRequestSerializer,
     PaymentRequestSerializer, FeedbackSerializer, JobRequestResponseSerializer,
-    JobStatusUpdateSerializer, ClientFeedbackSerializer, JobRequestResponseSerializer
+    JobStatusUpdateSerializer, ClientFeedbackSerializer, JobRequestResponseSerializer,
+    DisputeSerializer
 )
 from core.utils import IsClient, IsWorker
-from .utils import initialize_payment, verify_payment
+from apps.management.permissions import IsSuperuser
+from .utils import initialize_payment, verify_payment, send_notification
 from django.core.mail import send_mail
 from django.conf import settings
 from twilio.base.exceptions import TwilioRestException
@@ -20,15 +22,13 @@ from django.contrib.auth import get_user_model
 from django.views.decorators.csrf import csrf_exempt
 from .serializers import TransactionSerializer
 from django.core.exceptions import ObjectDoesNotExist
-from .serializers import TransactionSerializer
-from .utils import initialize_payment
-from django.core.exceptions import ObjectDoesNotExist
 from rest_framework.serializers import ValidationError
 import logging
 import hmac
 import hashlib
 import requests
 import re 
+from django.db import models
 
 User = get_user_model()
 
@@ -1269,3 +1269,158 @@ class WorkerJobCompletionView(APIView):
 
         serializer = JobSerializer(job)
         return Response(serializer.data)
+
+class DisputeCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_description="Create a new dispute for a job",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['reported_user_id', 'dispute_type', 'description'],
+            properties={
+                'reported_user_id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                'dispute_type': openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    enum=['payment', 'quality', 'behavior', 'other']
+                ),
+                'description': openapi.Schema(type=openapi.TYPE_STRING)
+            }
+        ),
+        responses={
+            201: DisputeSerializer,
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def post(self, request, job_id):
+        try:
+            job = Job.objects.get(id=job_id)
+            reported_user = User.objects.get(id=request.data.get('reported_user_id'))
+        except (Job.DoesNotExist, User.DoesNotExist):
+            return Response(
+                {"error": "Job or user not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = DisputeSerializer(
+            data=request.data,
+            context={
+                'request': request,
+                'job': job,
+                'reported_user': reported_user
+            }
+        )
+
+        if serializer.is_valid():
+            dispute = serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class DisputeListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_description="List all disputes for the authenticated user",
+        responses={
+            200: DisputeSerializer(many=True),
+            401: 'Unauthorized'
+        }
+    )
+    def get(self, request):
+        disputes = Dispute.objects.filter(
+            models.Q(reported_by=request.user) | models.Q(reported_user=request.user)
+        )
+        serializer = DisputeSerializer(disputes, many=True)
+        return Response(serializer.data)
+
+class DisputeDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_description="Get details of a specific dispute",
+        responses={
+            200: DisputeSerializer,
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def get(self, request, dispute_id):
+        try:
+            dispute = Dispute.objects.get(id=dispute_id)
+            if request.user != dispute.reported_by and request.user != dispute.reported_user:
+                return Response(
+                    {"error": "You don't have permission to view this dispute"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            serializer = DisputeSerializer(dispute)
+            return Response(serializer.data)
+        except Dispute.DoesNotExist:
+            return Response(
+                {"error": "Dispute not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+class AdminDisputeListView(APIView):
+    permission_classes = [IsAuthenticated, IsSuperuser]
+
+    @swagger_auto_schema(
+        operation_description="List all disputes (admin only)",
+        responses={
+            200: DisputeSerializer(many=True),
+            401: 'Unauthorized',
+            403: 'Forbidden'
+        }
+    )
+    def get(self, request):
+        disputes = Dispute.objects.all()
+        serializer = DisputeSerializer(disputes, many=True)
+        return Response(serializer.data)
+
+class AdminDisputeResolveView(APIView):
+    permission_classes = [IsAuthenticated, IsSuperuser]
+
+    @swagger_auto_schema(
+        operation_description="Resolve a dispute (admin only)",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['resolution'],
+            properties={
+                'resolution': openapi.Schema(type=openapi.TYPE_STRING)
+            }
+        ),
+        responses={
+            200: DisputeSerializer,
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def post(self, request, dispute_id):
+        try:
+            dispute = Dispute.objects.get(id=dispute_id)
+            if dispute.status in ['resolved', 'closed']:
+                return Response(
+                    {"error": "This dispute has already been resolved"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            resolution = request.data.get('resolution')
+            if not resolution:
+                return Response(
+                    {"error": "Resolution text is required"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            dispute.mark_as_resolved(request.user, resolution)
+            serializer = DisputeSerializer(dispute)
+            return Response(serializer.data)
+        except Dispute.DoesNotExist:
+            return Response(
+                {"error": "Dispute not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
