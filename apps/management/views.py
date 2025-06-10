@@ -20,6 +20,7 @@ from rest_framework.decorators import action
 from django.db.models import Q
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
+from .serializers import NotificationLogSerializer, SystemAnalyticsSerializer, BroadcastNotificationSerializer, ManagementLogSerializer, NotificationTemplateSerializer
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
