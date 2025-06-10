@@ -5,7 +5,7 @@ import re
 from django.conf import settings
 from apps.management.models import ManagementLog
 from django.core.mail import send_mail
-from twilio.rest import TwilioClient
+
 
 logger = logging.getLogger(__name__)
 
