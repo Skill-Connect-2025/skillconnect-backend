@@ -148,14 +148,19 @@ class JobStatusUpdateSerializer(serializers.Serializer):
 
     def validate(self, data):
         job = self.context['job']
+        user = self.context['request'].user
         
         # Check if job is in progress
-        if job.status != 'in_progress':
-            raise serializers.ValidationError("Only jobs in progress can be marked as completed.")
+        if job.status not in ['in_progress', 'client_completed', 'worker_completed']:
+            raise serializers.ValidationError("Job must be in progress or partially completed.")
         
         # Check if job has an assigned worker
         if not job.assigned_worker:
             raise serializers.ValidationError("Cannot complete a job without an assigned worker.")
+        
+        # Check if user is either client or worker
+        if user != job.client and (not hasattr(user, 'worker') or user.worker != job.assigned_worker):
+            raise serializers.ValidationError("Only the client or assigned worker can mark the job as completed.")
         
         return data
 

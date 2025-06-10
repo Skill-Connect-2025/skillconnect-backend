@@ -5,7 +5,8 @@ from .views import (
     JobRequestView, JobRequestResponseView, JobStatusUpdateView,
     JobPaymentRequestView, JobFeedbackView, ClientFeedbackView,
     PaymentCallbackView, WorkerJobRequestsView, ClientSentRequestsView, 
-    PaymentConfirmView, JobApplicationResponseView, JobReviewsView
+    PaymentConfirmView, JobApplicationResponseView, JobReviewsView,
+    ClientJobCompletionView, WorkerJobCompletionView
 )
 
 urlpatterns = [
@@ -29,4 +30,6 @@ urlpatterns = [
     path('worker/requests/', WorkerJobRequestsView.as_view(), name='worker_job_requests'), 
     path('client/requests/', ClientSentRequestsView.as_view(), name='client_sent_requests'), 
     path('jobs/<int:id>/payment-confirm/', PaymentConfirmView.as_view(), name='payment-confirm'),
+    path('jobs/<int:job_id>/client-complete/', ClientJobCompletionView.as_view(), name='client_job_complete'),
+    path('jobs/<int:job_id>/worker-complete/', WorkerJobCompletionView.as_view(), name='worker_job_complete'),
 ]

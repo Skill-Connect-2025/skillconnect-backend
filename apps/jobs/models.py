@@ -3,6 +3,7 @@ from django.conf import settings
 from core.constants import JOB_STATUS_CHOICES, JOB_APPLICATION_STATUS_CHOICES, PAYMENT_METHOD_CHOICES, JOB_REQUEST_STATUS_CHOICES
 from apps.users.models import Worker
 from django.contrib.auth.models import User
+from django.utils import timezone
 
 class Category(models.Model):
     name = models.CharField(max_length=100, unique=True)
@@ -133,3 +134,31 @@ class Transaction(models.Model):
 
     def __str__(self):
         return f"Transaction {self.tx_ref} for Job {self.job.title}"
+
+class JobCompletion(models.Model):
+    job = models.OneToOneField(Job, on_delete=models.CASCADE, related_name='completion')
+    client_completed = models.BooleanField(default=False)
+    worker_completed = models.BooleanField(default=False)
+    client_completed_at = models.DateTimeField(null=True, blank=True)
+    worker_completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Completion status for {self.job.title}"
+
+    def mark_client_completed(self):
+        self.client_completed = True
+        self.client_completed_at = timezone.now()
+        self.save()
+        if self.worker_completed:
+            self.job.status = 'completed'
+            self.job.save()
+
+    def mark_worker_completed(self):
+        self.worker_completed = True
+        self.worker_completed_at = timezone.now()
+        self.save()
+        if self.client_completed:
+            self.job.status = 'completed'
+            self.job.save()

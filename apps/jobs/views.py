@@ -4,7 +4,7 @@ from rest_framework import status, generics
 from rest_framework.permissions import IsAuthenticated
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
-from .models import Job, JobApplication, JobRequest, Feedback, PaymentRequest, Transaction, JobImage, Category
+from .models import Job, JobApplication, JobRequest, Feedback, PaymentRequest, Transaction, JobImage, Category, JobCompletion
 from .serializers import (
     JobSerializer, JobApplicationSerializer, JobRequestSerializer,
     PaymentRequestSerializer, FeedbackSerializer, JobRequestResponseSerializer,
@@ -688,10 +688,10 @@ class JobRequestResponseView(APIView):
     
 
 class JobStatusUpdateView(APIView):
-    permission_classes = [IsAuthenticated, IsClient]
+    permission_classes = [IsAuthenticated]
 
     @swagger_auto_schema(
-        operation_description="Update job status to completed.",
+        operation_description="Mark job as completed (requires both client and worker to mark as completed)",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
             required=['status'],
@@ -709,26 +709,56 @@ class JobStatusUpdateView(APIView):
     )
     def put(self, request, pk):
         try:
-            job = Job.objects.get(pk=pk, client=request.user)
+            job = Job.objects.get(pk=pk)
         except Job.DoesNotExist:
-            return Response({"error": "Job not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
-        serializer = JobStatusUpdateSerializer(data=request.data, context={'job': job})
-        if serializer.is_valid():
-            job.status = serializer.validated_data['status']
+            return Response({"error": "Job not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Check if user is either client or worker
+        if request.user != job.client and (not hasattr(request.user, 'worker') or request.user.worker != job.assigned_worker):
+            return Response({"error": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
+
+        # Get or create completion status
+        completion, created = JobCompletion.objects.get_or_create(job=job)
+
+        # Update completion status based on user role
+        if request.user == job.client:
+            if completion.client_completed:
+                return Response({"error": "You have already marked this job as completed"}, status=status.HTTP_400_BAD_REQUEST)
+            completion.mark_client_completed()
+            job.status = 'client_completed'
             job.save()
+            
             # Notify worker
-            email_subject = f"Job Completed: {job.title}"
+            email_subject = f"Job Marked as Completed by Client: {job.title}"
             email_message = (
                 f"Dear {job.assigned_worker.user.first_name},\n\n"
                 f"The client has marked job '{job.title}' as completed.\n"
-                f"You can now request payment via SkillConnect.\n\n"
+                f"Please review and mark the job as completed if you agree.\n\n"
                 f"Best regards,\nSkillConnect Team"
             )
-            sms_message = f"Job {job.title} marked as completed. You can now request payment."
+            sms_message = f"Client marked job {job.title} as completed. Please review and confirm."
             send_notification(job.assigned_worker.user, email_subject, email_message, sms_message)
-            serializer = JobSerializer(job)
-            return Response(serializer.data)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        else:  # Worker
+            if completion.worker_completed:
+                return Response({"error": "You have already marked this job as completed"}, status=status.HTTP_400_BAD_REQUEST)
+            completion.mark_worker_completed()
+            job.status = 'worker_completed'
+            job.save()
+            
+            # Notify client
+            email_subject = f"Job Marked as Completed by Worker: {job.title}"
+            email_message = (
+                f"Dear {job.client.first_name},\n\n"
+                f"The worker has marked job '{job.title}' as completed.\n"
+                f"Please review and mark the job as completed if you agree.\n\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            sms_message = f"Worker marked job {job.title} as completed. Please review and confirm."
+            send_notification(job.client, email_subject, email_message, sms_message)
+
+        serializer = JobSerializer(job)
+        return Response(serializer.data)
 
 class JobPaymentRequestView(APIView):
     permission_classes = [IsAuthenticated, IsWorker]
@@ -1153,3 +1183,89 @@ class JobReviewsView(APIView):
                 {"error": "Job not found"},
                 status=status.HTTP_404_NOT_FOUND
             )
+
+class ClientJobCompletionView(APIView):
+    permission_classes = [IsAuthenticated, IsClient]
+
+    @swagger_auto_schema(
+        operation_description="Client marks a job as completed",
+        responses={
+            200: JobSerializer,
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def post(self, request, job_id):
+        try:
+            job = Job.objects.get(pk=job_id, client=request.user)
+        except Job.DoesNotExist:
+            return Response({"error": "Job not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Get or create completion status
+        completion, created = JobCompletion.objects.get_or_create(job=job)
+
+        if completion.client_completed:
+            return Response({"error": "You have already marked this job as completed"}, status=status.HTTP_400_BAD_REQUEST)
+
+        completion.mark_client_completed()
+        job.status = 'client_completed'
+        job.save()
+        
+        # Notify worker
+        email_subject = f"Job Marked as Completed by Client: {job.title}"
+        email_message = (
+            f"Dear {job.assigned_worker.user.first_name},\n\n"
+            f"The client has marked job '{job.title}' as completed.\n"
+            f"Please review and mark the job as completed if you agree.\n\n"
+            f"Best regards,\nSkillConnect Team"
+        )
+        sms_message = f"Client marked job {job.title} as completed. Please review and confirm."
+        send_notification(job.assigned_worker.user, email_subject, email_message, sms_message)
+
+        serializer = JobSerializer(job)
+        return Response(serializer.data)
+
+class WorkerJobCompletionView(APIView):
+    permission_classes = [IsAuthenticated, IsWorker]
+
+    @swagger_auto_schema(
+        operation_description="Worker marks a job as completed",
+        responses={
+            200: JobSerializer,
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def post(self, request, job_id):
+        try:
+            job = Job.objects.get(pk=job_id, assigned_worker=request.user.worker)
+        except Job.DoesNotExist:
+            return Response({"error": "Job not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Get or create completion status
+        completion, created = JobCompletion.objects.get_or_create(job=job)
+
+        if completion.worker_completed:
+            return Response({"error": "You have already marked this job as completed"}, status=status.HTTP_400_BAD_REQUEST)
+
+        completion.mark_worker_completed()
+        job.status = 'worker_completed'
+        job.save()
+        
+        # Notify client
+        email_subject = f"Job Marked as Completed by Worker: {job.title}"
+        email_message = (
+            f"Dear {job.client.first_name},\n\n"
+            f"The worker has marked job '{job.title}' as completed.\n"
+            f"Please review and mark the job as completed if you agree.\n\n"
+            f"Best regards,\nSkillConnect Team"
+        )
+        sms_message = f"Worker marked job {job.title} as completed. Please review and confirm."
+        send_notification(job.client, email_subject, email_message, sms_message)
+
+        serializer = JobSerializer(job)
+        return Response(serializer.data)

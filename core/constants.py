@@ -3,7 +3,9 @@ JOB_STATUS_CHOICES = (
     ('posted', 'Posted'),           # Initial state when job is created
     ('open', 'Open'),              # Job is available for applications/requests
     ('in_progress', 'In Progress'), # Job has been assigned and is being worked on
-    ('completed', 'Completed'),     # Job is done but pending feedback
+    ('client_completed', 'Client Completed'), # Client marked as completed
+    ('worker_completed', 'Worker Completed'), # Worker marked as completed
+    ('completed', 'Completed'),     # Both parties marked as completed
     ('closed', 'Closed'),          # Job is fully completed with feedback
     ('cancelled', 'Cancelled'),    # Job was cancelled
 )
