@@ -20,6 +20,7 @@ class Job(models.Model):
     category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True)
     payment_method = models.CharField(max_length=50, choices=PAYMENT_METHOD_CHOICES)
     status = models.CharField(max_length=20, choices=JOB_STATUS_CHOICES, default='open')
+    has_active_dispute = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     assigned_worker = models.ForeignKey(
@@ -27,7 +28,21 @@ class Job(models.Model):
     )
 
     def __str__(self):
-        return f"{self.title} ({self.status})"
+        return f"{self.title} - {self.client.username}"
+
+    def update_dispute_status(self):
+        """Update job's dispute status based on active disputes."""
+        active_disputes = self.disputes.filter(status__in=['pending', 'in_review'])
+        self.has_active_dispute = active_disputes.exists()
+        self.save()
+
+    def can_be_completed(self):
+        """Check if job can be marked as completed."""
+        return (
+            self.status == 'in_progress' and
+            not self.has_active_dispute and
+            self.assigned_worker is not None
+        )
 
 class JobImage(models.Model):
     job = models.ForeignKey(Job, on_delete=models.CASCADE, related_name='images')
@@ -202,9 +217,51 @@ class Dispute(models.Model):
     def __str__(self):
         return f"Dispute #{self.id} - {self.job.title}"
 
+    def mark_as_in_review(self):
+        """Mark dispute as in review."""
+        if self.status == 'pending':
+            self.status = 'in_review'
+            self.save()
+            self.job.update_dispute_status()
+            return True
+        return False
+
     def mark_as_resolved(self, admin_user, resolution):
-        self.status = 'resolved'
-        self.resolution = resolution
-        self.resolved_by = admin_user
-        self.resolved_at = timezone.now()
-        self.save()
+        """Mark dispute as resolved with resolution message."""
+        if self.status in ['pending', 'in_review']:
+            self.status = 'resolved'
+            self.resolution = resolution
+            self.resolved_by = admin_user
+            self.resolved_at = timezone.now()
+            self.save()
+            self.job.update_dispute_status()
+            return True
+        return False
+
+    def mark_as_closed(self):
+        """Mark dispute as closed."""
+        if self.status == 'resolved':
+            self.status = 'closed'
+            self.save()
+            return True
+        return False
+
+    def notify_parties(self, subject, message):
+        """Send notifications to both parties."""
+        from apps.jobs.utils import send_notification
+        
+        # Notify reporter
+        send_notification(
+            self.reported_by,
+            subject,
+            message,
+            message
+        )
+        
+        # Notify reported user
+        send_notification(
+            self.reported_user,
+            subject,
+            message,
+            message
+        )

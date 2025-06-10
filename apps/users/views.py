@@ -9,13 +9,13 @@ from .serializers import (
     LoginSerializer, PasswordResetRequestSerializer, PasswordResetConfirmSerializer,
     ClientProfileSerializer, UserSerializer, WorkerProfileSerializer, FeedbackSerializer
 )
-from apps.jobs.models import JobApplication
+from apps.jobs.models import Job, JobApplication
 from apps.jobs.serializers import JobApplicationSerializer, JobSerializer
 from core.utils import IsWorker, IsClient
 from django.core.mail import send_mail
 from django.contrib.auth import get_user_model
 from .permissions import RoleBasedPermission
-from .models import VerificationToken
+from .models import VerificationToken, Worker
 from django.utils import timezone
 from twilio.rest import Client as TwilioClient 
 from django.conf import settings

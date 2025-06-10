@@ -1,6 +1,15 @@
-from rest_framework.permissions import BasePermission
+from rest_framework import permissions
 
-class IsSuperuser(BasePermission):
-    """Permission class to check if the user is a superuser."""
+class IsSuperuser(permissions.BasePermission):
+    """
+    Allows access only to superusers.
+    """
     def has_permission(self, request, view):
-        return request.user and request.user.is_authenticated and request.user.is_superuser
+        return bool(request.user and request.user.is_authenticated and request.user.is_superuser)
+
+class IsAdminUser(permissions.BasePermission):
+    """
+    Allows access only to admin users (superusers or staff).
+    """
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and (request.user.is_superuser or request.user.is_staff))
