@@ -74,3 +74,28 @@ class SystemAnalytics(models.Model):
 
     def __str__(self):
         return f"Analytics for {self.date}"
+
+class NotificationTemplate(models.Model):
+    """Store notification templates for different types of notifications."""
+    name = models.CharField(max_length=100)
+    subject = models.CharField(max_length=200)
+    body = models.TextField()
+    type = models.CharField(max_length=50)  # e.g., 'job_assigned', 'payment_received'
+    variables = models.JSONField(default=list)  # List of required variables
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return f"{self.name} ({self.type})"
+
+    def render(self, context):
+        """Render the template with the given context variables."""
+        try:
+            subject = self.subject.format(**context)
+            body = self.body.format(**context)
+            return subject, body
+        except KeyError as e:
+            raise ValueError(f"Missing required variable: {e}")

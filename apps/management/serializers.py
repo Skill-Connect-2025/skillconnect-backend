@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from apps.management.models import ManagementLog, NotificationLog, SystemAnalytics
+from apps.management.models import ManagementLog, NotificationLog, SystemAnalytics, NotificationTemplate
 from apps.users.models import Worker, Client
 from apps.users.serializers import UserSerializer
 from apps.jobs.models import Feedback, Job, Transaction
@@ -154,3 +154,40 @@ class ManagementUserResetPasswordView(APIView):
             return Response({"message": "Password reset code sent"})
         except User.DoesNotExist:
             return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+class NotificationTemplateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = NotificationTemplate
+        fields = ['id', 'name', 'subject', 'body', 'type', 'variables', 'created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at']
+
+    def validate_variables(self, value):
+        """Validate that variables is a list of strings."""
+        if not isinstance(value, list):
+            raise serializers.ValidationError("Variables must be a list")
+        if not all(isinstance(v, str) for v in value):
+            raise serializers.ValidationError("All variables must be strings")
+        return value
+
+    def validate(self, data):
+        """Validate that all required variables are present in the template."""
+        subject = data.get('subject', '')
+        body = data.get('body', '')
+        variables = data.get('variables', [])
+
+        # Check for variables in subject and body
+        import re
+        template_vars = set(re.findall(r'\{(\w+)\}', subject + body))
+        required_vars = set(variables)
+
+        if template_vars != required_vars:
+            missing = required_vars - template_vars
+            extra = template_vars - required_vars
+            errors = []
+            if missing:
+                errors.append(f"Variables {missing} are required but not used in template")
+            if extra:
+                errors.append(f"Variables {extra} are used in template but not declared")
+            raise serializers.ValidationError(errors)
+
+        return data
