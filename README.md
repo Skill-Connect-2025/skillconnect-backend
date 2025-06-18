@@ -7,6 +7,21 @@
 ## Authentication
 All admin API endpoints require authentication using a token. Only users with admin privileges can access these endpoints.
 
+### Token Management
+The admin token is required for all management API endpoints. The token should be included in the `Authorization` header of every request:
+
+```http
+Authorization: Token a68cb591bd3e12365facfbe16448e90c1016d83c
+```
+
+**Important Notes:**
+- The token is valid for 24 hours
+- Store the token securely in your frontend application
+- Use environment variables to store the token
+- Never expose the token in client-side code
+- Implement token refresh mechanism
+- Handle token expiration gracefully
+
 ### Login
 ```http
 POST /users/auth/login/
