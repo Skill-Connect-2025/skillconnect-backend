@@ -21,3 +21,5 @@ apps/management/migrations/
 apps/management/migrations/__init__.py
 apps/management/migrations/0001_initial.py
 
+TESTING.md
+
