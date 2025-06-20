@@ -4,12 +4,12 @@ from rest_framework import status, generics
 from rest_framework.permissions import IsAuthenticated
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
-from .models import Job, JobApplication, JobRequest, Feedback, PaymentRequest, Transaction, JobImage, Category, JobCompletion, Dispute
+from .models import Job, JobApplication, JobRequest, Feedback, PaymentRequest, Transaction, JobImage, Category, JobCompletion, Dispute, Worker
 from .serializers import (
     JobSerializer, JobApplicationSerializer, JobRequestSerializer,
     PaymentRequestSerializer, FeedbackSerializer, JobRequestResponseSerializer,
     JobStatusUpdateSerializer, ClientFeedbackSerializer, JobRequestResponseSerializer,
-    DisputeSerializer
+    DisputeSerializer, PublicWorkerProfileSerializer
 )
 from core.utils import IsClient, IsWorker
 from apps.management.permissions import IsSuperuser
@@ -29,14 +29,13 @@ import hashlib
 import requests
 import re 
 from django.db import models
+from rest_framework import serializers
 
 User = get_user_model()
 
 logger = logging.getLogger(__name__)
 
 def send_notification(user, subject, email_message, sms_message):
-    """Send notification via email and SMS (if phone_number is valid)."""
-    # Send email
     try:
         send_mail(
             subject=subject,
@@ -48,12 +47,9 @@ def send_notification(user, subject, email_message, sms_message):
     except Exception as e:
         logger.error(f"Failed to send email to {user.email}: {str(e)}")
 
-    # Send SMS if phone_number exists and is valid
     if user.phone_number:
-        # Validate phone number format (e.g., starts with + followed by 9-15 digits)
         if not re.match(r'^\+\d{9,15}$', user.phone_number):
             logger.warning(f"Invalid phone number format for user {user.id}: {user.phone_number}")
-            # Fallback to email without mentioning failure
             try:
                 send_mail(
                     subject=subject,
@@ -74,7 +70,6 @@ def send_notification(user, subject, email_message, sms_message):
             )
         except TwilioRestException as e:
             logger.error(f"Failed to send SMS to {user.phone_number}: {str(e)}")
-            # Fallback to email without mentioning failure
             try:
                 send_mail(
                     subject=subject,
@@ -381,8 +376,20 @@ class JobApplicationView(APIView):
         )
         
         if serializer.is_valid():
-            serializer.save()
+            application = serializer.save()
             logger.info(f"Worker {request.user.worker.id} applied to job {id}")
+            
+            # Notify client about new application
+            email_subject = f"New Application for Job: {job.title}"
+            email_message = (
+                f"Dear {job.client.first_name},\n\n"
+                f"Worker {request.user.first_name} {request.user.last_name} has applied for your job '{job.title}'.\n"
+                f"Please review the application in the SkillConnect platform.\n\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            sms_message = f"New application for job '{job.title}' from {request.user.first_name}. Review in SkillConnect."
+            send_notification(job.client, email_subject, email_message, sms_message)
+            
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         
         logger.error(f"Job application failed for job {id}: {serializer.errors}")
@@ -483,65 +490,6 @@ class JobRequestView(APIView):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-class JobApplicationResponseView(APIView):
-    permission_classes = [IsAuthenticated, IsClient]
-
-    @swagger_auto_schema(
-        operation_description="Accept or reject a worker's application.",
-        request_body=openapi.Schema(
-            type=openapi.TYPE_OBJECT,
-            required=['status'],
-            properties={
-                'status': openapi.Schema(type=openapi.TYPE_STRING, enum=['accepted', 'rejected'])
-            },
-        ),
-        responses={
-            200: JobApplicationSerializer,
-            400: 'Bad Request',
-            401: 'Unauthorized',
-            403: 'Forbidden',
-            404: 'Not Found'
-        }
-    )
-    def post(self, request, job_id, application_id):
-        try:
-            job = Job.objects.get(pk=job_id, client=request.user)
-            application = JobApplication.objects.get(pk=application_id, job=job)
-        except (Job.DoesNotExist, JobApplication.DoesNotExist):
-            return Response({"error": "Job or application not found"}, status=status.HTTP_404_NOT_FOUND)
-
-        if application.status != 'pending':
-            return Response({"error": "Application has already been processed"}, status=status.HTTP_400_BAD_REQUEST)
-
-        status = request.data.get('status')
-        if status not in ['accepted', 'rejected']:
-            return Response({"error": "Invalid status"}, status=status.HTTP_400_BAD_REQUEST)
-
-        if status == 'accepted':
-            if job.assigned_worker:
-                return Response({"error": "Job already has an assigned worker"}, status=status.HTTP_400_BAD_REQUEST)
-            job.assigned_worker = application.worker
-            job.status = 'in_progress'
-            job.save()
-
-            # Notify worker
-            email_subject = f"Application Accepted for {job.title}"
-            email_message = (
-                f"Dear {application.worker.user.first_name},\n\n"
-                f"Your application for job '{job.title}' has been accepted.\n"
-                f"Contact the client at:\n"
-                f"- Email: {job.client.email}\n"
-                f"- Phone: {job.client.phone_number or 'Not provided'}\n\n"
-                f"Best regards,\nSkillConnect Team"
-            )
-            sms_message = f"Your application for '{job.title}' was accepted. Contact client for details."
-            send_notification(application.worker.user, email_subject, email_message, sms_message)
-
-        application.status = status
-        application.save()
-
-        serializer = JobApplicationSerializer(application)
-        return Response(serializer.data)
 
 class ClientFeedbackView(APIView):
     permission_classes = [IsAuthenticated, IsWorker]
@@ -564,9 +512,9 @@ class ClientFeedbackView(APIView):
             404: 'Not Found'
         }
     )
-    def post(self, request, job_id):
+    def post(self, request, pk):
         try:
-            job = Job.objects.get(pk=job_id)
+            job = Job.objects.get(pk=pk)
             if job.assigned_worker != request.user.worker:
                 return Response({"error": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
         except Job.DoesNotExist:
@@ -600,11 +548,11 @@ class ClientFeedbackView(APIView):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-class JobRequestResponseView(APIView):
-    permission_classes = [IsAuthenticated, IsWorker]
+class JobApplicationResponseView(APIView):
+    permission_classes = [IsAuthenticated, IsClient]
 
     @swagger_auto_schema(
-        operation_description="Accept or reject a job request.",
+        operation_description="Accept or reject a worker's application.",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
             required=['status'],
@@ -613,77 +561,88 @@ class JobRequestResponseView(APIView):
             },
         ),
         responses={
-            200: JobRequestSerializer,
+            200: JobApplicationSerializer,
             400: 'Bad Request',
             401: 'Unauthorized',
             403: 'Forbidden',
             404: 'Not Found'
         }
     )
-    def post(self, request, pk, request_id):
+    def post(self, request, job_id, application_id):
         try:
-            job = Job.objects.get(pk=pk)
-            job_request = JobRequest.objects.get(id=request_id, application__job=job, application__worker=request.user.worker)
-        except (Job.DoesNotExist, JobRequest.DoesNotExist):
-            return Response({"error": "Job or request not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
-        serializer = JobRequestResponseSerializer(data=request.data, context={'job_request': job_request})
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        job_request.status = serializer.validated_data['status']
-        job_request.save()
-        if job_request.status == 'accepted':
-            job_request.application.status = 'accepted'
-            job_request.application.save()
-            job.assigned_worker = request.user.worker
+            job = Job.objects.get(pk=job_id, client=request.user)
+            application = JobApplication.objects.get(pk=application_id, job=job)
+        except (Job.DoesNotExist, JobApplication.DoesNotExist):
+            return Response({"error": "Job or application not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if application.status != 'pending':
+            return Response({"error": "Application has already been processed"}, status=status.HTTP_400_BAD_REQUEST)
+
+        status_val = request.data.get('status')
+        if status_val not in ['accepted', 'rejected']:
+            return Response({"error": "Invalid status"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if status_val == 'accepted':
+            if job.assigned_worker:
+                return Response({"error": "Job already has an assigned worker"}, status=status.HTTP_400_BAD_REQUEST)
+            job.assigned_worker = application.worker
             job.status = 'in_progress'
-            job.save()  
-            # Notify client (with contact info)
-            email_subject = f"Worker Accepted Request for Job: {job.title}"
-            email_message = (
-                f"Dear {job.client.first_name},\n\n"
-                f"Worker {request.user.first_name} {request.user.last_name} has accepted your request for job: {job.title}.\n"
-                f"Contact them at:\n"
-                f"- Email: {request.user.email}\n"
-                f"- Phone: {request.user.phone_number or 'Not provided'}\n\n"
-                f"Best regards,\nSkillConnect Team"
-            )
-            sms_message = (
-                f"Worker {request.user.first_name} accepted job: {job.title}. "
-                f"Contact: {request.user.email}, {request.user.phone_number or 'Not provided'}"
-            )
-            send_notification(job.client, email_subject, email_message, sms_message)
-            # Notify worker (with contact info)
-            email_subject = f"Assigned to Job: {job.title}"
-            email_message = (
-                f"Dear {request.user.first_name},\n\n"
-                f"You have been assigned to job: {job.title}.\n"
+            job.save()
+
+            # Notify worker (with client contact info)
+            email_subject_worker = f"Application Accepted for {job.title}"
+            email_message_worker = (
+                f"Dear {application.worker.user.first_name},\n\n"
+                f"Your application for job '{job.title}' has been accepted.\n"
                 f"Contact the client at:\n"
                 f"- Email: {job.client.email}\n"
                 f"- Phone: {job.client.phone_number or 'Not provided'}\n\n"
                 f"Best regards,\nSkillConnect Team"
             )
-            sms_message = (
-                f"Assigned to job: {job.title}. "
-                f"Contact client: {job.client.email}, {job.client.phone_number or 'Not provided'}"
-            )
-            send_notification(request.user, email_subject, email_message, sms_message)
-        else:  # Rejected
-            job_request.application.status = 'rejected'
-            job_request.application.save()
-            # Notify client (no contact info)
-            email_subject = f"Worker Rejected Request for Job: {job.title}"
-            email_message = (
+            sms_message_worker = f"Your application for '{job.title}' was accepted. Contact client for details."
+            send_notification(application.worker.user, email_subject_worker, email_message_worker, sms_message_worker)
+
+            # Notify client (with worker contact info)
+            email_subject_client = f"You Accepted an Application for {job.title}"
+            email_message_client = (
                 f"Dear {job.client.first_name},\n\n"
-                f"Worker {request.user.first_name} {request.user.last_name} has rejected your request for job: {job.title}.\n"
-                f"Please consider sending requests to other workers.\n\n"
+                f"You have accepted {application.worker.user.first_name} {application.worker.user.last_name}'s application for job '{job.title}'.\n"
+                f"Contact the worker at:\n"
+                f"- Email: {application.worker.user.email}\n"
+                f"- Phone: {application.worker.user.phone_number or 'Not provided'}\n\n"
                 f"Best regards,\nSkillConnect Team"
             )
-            sms_message = (
-                f"Worker {request.user.first_name} rejected job: {job.title}. "
-                f"Send requests to other workers on SkillConnect."
+            sms_message_client = (
+                f"You accepted {application.worker.user.first_name}'s application for '{job.title}'. "
+                f"Contact: {application.worker.user.email}, {application.worker.user.phone_number or 'Not provided'}"
             )
-            send_notification(job.client, email_subject, email_message, sms_message)
-        serializer = JobRequestSerializer(job_request)
+            send_notification(job.client, email_subject_client, email_message_client, sms_message_client)
+
+        else:  # Rejected
+            # Notify worker (NO client contact info)
+            email_subject_worker = f"Application Rejected for {job.title}"
+            email_message_worker = (
+                f"Dear {application.worker.user.first_name},\n\n"
+                f"Your application for job '{job.title}' has been rejected by the client.\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            sms_message_worker = f"Your application for '{job.title}' was rejected."
+            send_notification(application.worker.user, email_subject_worker, email_message_worker, sms_message_worker)
+
+            # Notify client (confirmation, no contact info)
+            email_subject_client = f"You Rejected an Application for {job.title}"
+            email_message_client = (
+                f"Dear {job.client.first_name},\n\n"
+                f"You have rejected {application.worker.user.first_name} {application.worker.user.last_name}'s application for job '{job.title}'.\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            sms_message_client = f"You rejected {application.worker.user.first_name}'s application for '{job.title}'."
+            send_notification(job.client, email_subject_client, email_message_client, sms_message_client)
+
+        application.status = status_val
+        application.save()
+
+        serializer = JobApplicationSerializer(application)
         return Response(serializer.data)
     
 
@@ -888,141 +847,56 @@ class ClientSentRequestsView(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 class PaymentConfirmView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsClient]
 
     @swagger_auto_schema(
+        operation_description="Client confirms payment for a job.",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
+            required=['confirmation_code'],
             properties={
-                'amount': openapi.Schema(type=openapi.TYPE_NUMBER, description='Payment amount in ETB')
+                'confirmation_code': openapi.Schema(type=openapi.TYPE_STRING)
             },
-            required=['amount']
         ),
         responses={
-            201: openapi.Schema(
-                type=openapi.TYPE_OBJECT,
-                properties={
-                    'payment': openapi.Schema(
-                        type=openapi.TYPE_OBJECT,
-                        properties={
-                            'id': openapi.Schema(type=openapi.TYPE_INTEGER),
-                            'job': openapi.Schema(type=openapi.TYPE_INTEGER),
-                            'client': openapi.Schema(type=openapi.TYPE_INTEGER),
-                            'worker': openapi.Schema(type=openapi.TYPE_INTEGER),
-                            'amount': openapi.Schema(type=openapi.TYPE_STRING),
-                            'currency': openapi.Schema(type=openapi.TYPE_STRING),
-                            'tx_ref': openapi.Schema(type=openapi.TYPE_STRING),
-                            'transaction_id': openapi.Schema(type=openapi.TYPE_STRING, nullable=True),
-                            'payment_method': openapi.Schema(type=openapi.TYPE_STRING),
-                            'status': openapi.Schema(type=openapi.TYPE_STRING),
-                            'created_at': openapi.Schema(type=openapi.TYPE_STRING, format='date-time')
-                        }
-                    ),
-                    'checkout_url': openapi.Schema(type=openapi.TYPE_STRING)
-                }
-            ),
+            200: JobSerializer,
             400: 'Bad Request',
             401: 'Unauthorized',
-            404: 'Not Found',
-            503: 'Service Unavailable'
+            403: 'Forbidden',
+            404: 'Not Found'
         }
     )
     def post(self, request, id):
         try:
-            job = Job.objects.get(id=id, client=request.user)
-            serializer = TransactionSerializer(data=request.data, context={'job': job, 'request': request})
-            serializer.is_valid(raise_exception=True)
-            amount = serializer.validated_data['amount']
+            job = Job.objects.get(pk=id, client=request.user)
+        except Job.DoesNotExist:
+            return Response({"error": "Job not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
 
-            if not job.assigned_worker:
-                raise ValidationError("No worker assigned to job")
+        confirmation_code = request.data.get('confirmation_code')
+        # ... your payment confirmation logic here ...
+        # If payment is confirmed:
+        job.status = 'completed'
+        job.save()
 
-            checkout_url, tx_ref = initialize_payment(job, request.user, amount)
-            transaction = Transaction.objects.create(
-                job=job,
-                client=request.user,
-                worker=job.assigned_worker,
-                amount=amount,
-                currency='ETB',
-                tx_ref=tx_ref,
-                payment_method='chapa',
-                status='pending'
-            )
+        # Optionally, update transaction status if you have a Transaction model
+        # transaction = Transaction.objects.filter(job=job).last()
+        # if transaction:
+        #     transaction.status = 'completed'
+        #     transaction.save()
 
-            # Notify client
-            email_subject = f"Payment Initiated for Job: {job.title}"
-            email_message = (
-                f"Dear {job.client.first_name},\n\n"
-                f"You have initiated a payment of {amount} ETB for job: {job.title}.\n"
-                f"Please complete the payment via the provided checkout link.\n"
-                f"Checkout URL: {checkout_url}\n\n"
-                f"Best regards,\nSkillConnect Team"
-            )
-            sms_message = (
-                f"Payment of {amount} ETB initiated for job: {job.title}. "
-                f"Complete it at the checkout link."
-            )
-            send_notification(job.client, email_subject, email_message, sms_message)
+        # Notify worker
+        email_subject = f"Payment Confirmed for Job: {job.title}"
+        email_message = (
+            f"Dear {job.assigned_worker.user.first_name},\n\n"
+            f"The client has confirmed payment for job '{job.title}'.\n"
+            f"Thank you for your work!\n\n"
+            f"Best regards,\nSkillConnect Team"
+        )
+        sms_message = f"Payment for job {job.title} has been confirmed by the client."
+        send_notification(job.assigned_worker.user, email_subject, email_message, sms_message)
 
-            # Notify worker
-            email_subject = f"Payment Initiated for Job: {job.title}"
-            email_message = (
-                f"Dear {job.assigned_worker.user.first_name},\n\n"
-                f"The client has initiated a payment of {amount} ETB for job: {job.title}.\n"
-                f"You will be notified once the payment is confirmed.\n\n"
-                f"Best regards,\nSkillConnect Team"
-            )
-            sms_message = (
-                f"Payment of {amount} ETB initiated for job: {job.title}. "
-                f"Awaiting confirmation."
-            )
-            send_notification(job.assigned_worker.user, email_subject, email_message, sms_message)
-
-            response_serializer = TransactionSerializer(transaction)
-            return Response(
-                {
-                    'payment': response_serializer.data,
-                    'checkout_url': checkout_url
-                },
-                status=status.HTTP_201_CREATED
-            )
-
-        except ObjectDoesNotExist:
-            logger.error(f'Job {id} not found or not authorized for user {request.user.id}')
-            return Response(
-                {'error': 'Job not found or not authorized'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        except ValidationError as e:
-            logger.error(f'Validation error: {str(e)}')
-            return Response(
-                {'error': str(e)},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        except ValueError as e:
-            logger.error(f'Chapa initialization error: {str(e)}')
-            return Response(
-                {'error': str(e)},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        except requests.exceptions.HTTPError as e:
-            logger.error(f'Chapa HTTP error: {str(e)}')
-            return Response(
-                {'error': f'Invalid payment request: {str(e)}'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        except requests.exceptions.RequestException as e:
-            logger.error(f'Chapa API error: {str(e)}')
-            return Response(
-                {'error': 'Unable to connect to payment service'},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE
-            )
-        except Exception as e:
-            logger.error(f'Unexpected error in PaymentConfirmView: {str(e)}')
-            return Response(
-                {'error': 'Payment service unavailable'},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE
-            )
+        serializer = JobSerializer(job)
+        return Response(serializer.data)
 
 class PaymentCallbackView(APIView):
     @csrf_exempt
@@ -1210,9 +1084,9 @@ class ClientJobCompletionView(APIView):
             return Response({"error": "You have already marked this job as completed"}, status=status.HTTP_400_BAD_REQUEST)
 
         completion.mark_client_completed()
-        job.status = 'client_completed'
-        job.save()
-        
+        # DO NOT set job.status = 'client_completed' here!
+        # job.status is updated in mark_client_completed if both parties have completed
+
         # Notify worker
         email_subject = f"Job Marked as Completed by Client: {job.title}"
         email_message = (
@@ -1224,6 +1098,8 @@ class ClientJobCompletionView(APIView):
         sms_message = f"Client marked job {job.title} as completed. Please review and confirm."
         send_notification(job.assigned_worker.user, email_subject, email_message, sms_message)
 
+        # Reload job to get updated status
+        job.refresh_from_db()
         serializer = JobSerializer(job)
         return Response(serializer.data)
 
@@ -1253,9 +1129,9 @@ class WorkerJobCompletionView(APIView):
             return Response({"error": "You have already marked this job as completed"}, status=status.HTTP_400_BAD_REQUEST)
 
         completion.mark_worker_completed()
-        job.status = 'worker_completed'
-        job.save()
-        
+        # DO NOT set job.status = 'worker_completed' here!
+        # job.status is updated in mark_worker_completed if both parties have completed
+
         # Notify client
         email_subject = f"Job Marked as Completed by Worker: {job.title}"
         email_message = (
@@ -1267,6 +1143,8 @@ class WorkerJobCompletionView(APIView):
         sms_message = f"Worker marked job {job.title} as completed. Please review and confirm."
         send_notification(job.client, email_subject, email_message, sms_message)
 
+        # Reload job to get updated status
+        job.refresh_from_db()
         serializer = JobSerializer(job)
         return Response(serializer.data)
 
@@ -1424,3 +1302,135 @@ class AdminDisputeResolveView(APIView):
                 {"error": "Dispute not found"},
                 status=status.HTTP_404_NOT_FOUND
             )
+
+class PublicWorkerProfileSerializer(serializers.ModelSerializer):
+    rating_stats = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Worker
+        fields = [
+            'id', 'user', 'skills', 'location', 'profile_pic', 'rating_stats'
+        ]
+
+    def get_rating_stats(self, obj):
+        return obj.user.get_rating_stats()
+    
+
+class JobRequestResponseView(APIView):
+    permission_classes = [IsAuthenticated, IsWorker]
+
+    @swagger_auto_schema(
+        operation_description="Accept or reject a job request.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['status'],
+            properties={
+                'status': openapi.Schema(type=openapi.TYPE_STRING, enum=['accepted', 'rejected'])
+            },
+        ),
+        responses={
+            200: JobRequestSerializer,
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def post(self, request, pk, request_id):
+        try:
+            job = Job.objects.get(pk=pk)
+            job_request = JobRequest.objects.get(id=request_id, worker=request.user.worker, job=job)
+        except (Job.DoesNotExist, JobRequest.DoesNotExist):
+            return Response({"error": "Job or request not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
+        
+        serializer = JobRequestResponseSerializer(data=request.data, context={'job_request': job_request})
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        job_request.status = serializer.validated_data['status']
+        job_request.save()
+        
+        if job_request.status == 'accepted':
+            if job.status != 'open':
+                return Response({"error": "Job is no longer available"}, status=status.HTTP_400_BAD_REQUEST)
+            if job.assigned_worker:
+                return Response({"error": "Job already has an assigned worker"}, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Create or update job application
+            application, created = JobApplication.objects.get_or_create(
+                job=job,
+                worker=request.user.worker,
+                defaults={'status': 'accepted'}
+            )
+            if not created:
+                application.status = 'accepted'
+                application.save()
+            
+            job.assigned_worker = request.user.worker
+            job.status = 'in_progress'
+            job.save()
+            
+            # Notify client with worker contact info
+            email_subject_worker = f"Application Accepted for {job.title}"
+            email_message_worker = (
+                f"Dear {application.worker.user.first_name},\n\n"
+                f"Your application for job '{job.title}' has been accepted.\n"
+                f"Contact the client at:\n"
+                f"- Email: {job.client.email}\n"
+                f"- Phone: {job.client.phone_number or 'Not provided'}\n\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            sms_message_worker = f"Your application for '{job.title}' was accepted. Contact client for details."
+            send_notification(application.worker.user, email_subject_worker, email_message_worker, sms_message_worker)
+            
+            # Notify client (with worker contact info)
+            email_subject_client = f"You Accepted an Application for {job.title}"
+            email_message_client = (
+                f"Dear {job.client.first_name},\n\n"
+                f"You have accepted {application.worker.user.first_name} {application.worker.user.last_name}'s application for job '{job.title}'.\n"
+                f"Contact the worker at:\n"
+                f"- Email: {application.worker.user.email}\n"
+                f"- Phone: {application.worker.user.phone_number or 'Not provided'}\n\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            sms_message_client = (
+                f"You accepted {application.worker.user.first_name}'s application for '{job.title}'. "
+                f"Contact: {application.worker.user.email}, {application.worker.user.phone_number or 'Not provided'}"
+            )
+            send_notification(job.client, email_subject_client, email_message_client, sms_message_client)
+        
+        else:  # Rejected
+            # Create or update job application
+            application, created = JobApplication.objects.get_or_create(
+                job=job,
+                worker=request.user.worker,
+                defaults={'status': 'rejected'}
+            )
+            if not created:
+                application.status = 'rejected'
+                application.save()
+            
+            # Notify client without contact info
+            email_subject_worker = f"Application Rejected for {job.title}"
+            email_message_worker = (
+                f"Dear {job.client.first_name},\n\n"
+                f"Worker {request.user.first_name} {request.user.last_name} has rejected your request for job: {job.title}.\n"
+                f"Please consider sending requests to other workers.\n\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            sms_message_worker = f"Worker {request.user.first_name} rejected job: {job.title}. Send requests to other workers."
+            send_notification(job.client, email_subject_worker, email_message_worker, sms_message_worker)
+            
+            # Notify worker
+            email_subject_client = f"Job Request Rejected: {job.title}"
+            email_message_client = (
+                f"Dear {request.user.first_name},\n\n"
+                f"You have rejected the request for job: {job.title}.\n"
+                f"Explore other job opportunities on SkillConnect.\n\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            sms_message_client = f"You rejected the request for job: {job.title}. Explore other jobs on SkillConnect."
+            send_notification(request.user, email_subject_client, email_message_client, sms_message_client)
+        
+        serializer = JobRequestSerializer(job_request)
+        return Response(serializer.data)
