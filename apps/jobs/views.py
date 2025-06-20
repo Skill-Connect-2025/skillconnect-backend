@@ -4,14 +4,16 @@ from rest_framework import status, generics
 from rest_framework.permissions import IsAuthenticated
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
-from .models import Job, JobApplication, JobRequest, Feedback, PaymentRequest, Transaction, JobImage, Category
+from .models import Job, JobApplication, JobRequest, Feedback, PaymentRequest, Transaction, JobImage, Category, JobCompletion, Dispute
 from .serializers import (
     JobSerializer, JobApplicationSerializer, JobRequestSerializer,
     PaymentRequestSerializer, FeedbackSerializer, JobRequestResponseSerializer,
-    JobStatusUpdateSerializer
+    JobStatusUpdateSerializer, ClientFeedbackSerializer, JobRequestResponseSerializer,
+    DisputeSerializer
 )
 from core.utils import IsClient, IsWorker
-from .utils import initialize_payment, verify_payment
+from apps.management.permissions import IsSuperuser
+from .utils import initialize_payment, verify_payment, send_notification
 from django.core.mail import send_mail
 from django.conf import settings
 from twilio.base.exceptions import TwilioRestException
@@ -20,15 +22,13 @@ from django.contrib.auth import get_user_model
 from django.views.decorators.csrf import csrf_exempt
 from .serializers import TransactionSerializer
 from django.core.exceptions import ObjectDoesNotExist
-from .serializers import TransactionSerializer
-from .utils import initialize_payment
-from django.core.exceptions import ObjectDoesNotExist
 from rest_framework.serializers import ValidationError
 import logging
 import hmac
 import hashlib
 import requests
 import re 
+from django.db import models
 
 User = get_user_model()
 
@@ -125,8 +125,29 @@ class JobListView(APIView):
     permission_classes = [IsAuthenticated, IsClient]
 
     @swagger_auto_schema(
-        operation_description="List all jobs posted by the authenticated client.",
-        responses={200: JobSerializer(many=True), 401: 'Unauthorized', 403: 'Forbidden'}
+        operation_description="List all jobs",
+        responses={
+            200: openapi.Response(
+                description='List of jobs',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        properties={
+                            'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'title': openapi.Schema(type=openapi.TYPE_STRING),
+                            'location': openapi.Schema(type=openapi.TYPE_STRING),
+                            'skills': openapi.Schema(type=openapi.TYPE_STRING),
+                            'description': openapi.Schema(type=openapi.TYPE_STRING),
+                            'payment_method': openapi.Schema(type=openapi.TYPE_STRING),
+                            'status': openapi.Schema(type=openapi.TYPE_STRING),
+                            'created_at': openapi.Schema(type=openapi.TYPE_STRING, format='date-time')
+                        }
+                    )
+                )
+            ),
+            401: 'Unauthorized'
+        }
     )
     def get(self, request):  
         queryset = Job.objects.filter(client=self.request.user)
@@ -177,14 +198,40 @@ class JobUpdateView(APIView):
             404: 'Not Found'
         }
     )
-    def put(self, request, id):  
+    def put(self, request, id):
         try:
             job = Job.objects.get(pk=id, client=request.user)
         except Job.DoesNotExist:
             return Response({"error": "Job not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Store old data for comparison
+        old_title = job.title
+        old_location = job.location
+        old_description = job.description
+        
         serializer = JobSerializer(job, data=request.data, partial=True)
         if serializer.is_valid():
-            serializer.save()
+            updated_job = serializer.save()
+            
+            # Notify assigned worker if any and if significant changes were made
+            if job.assigned_worker and (
+                old_title != updated_job.title or
+                old_location != updated_job.location or
+                old_description != updated_job.description
+            ):
+                email_subject = f"Job Updated: {updated_job.title}"
+                email_message = (
+                    f"Dear {job.assigned_worker.user.first_name},\n\n"
+                    f"The job '{updated_job.title}' has been updated by the client.\n"
+                    f"Updated Details:\n"
+                    f"- Title: {updated_job.title}\n"
+                    f"- Location: {updated_job.location}\n"
+                    f"- Description: {updated_job.description}\n\n"
+                    f"Best regards,\nSkillConnect Team"
+                )
+                sms_message = f"Job '{updated_job.title}' has been updated. Please check the new details."
+                send_notification(job.assigned_worker.user, email_subject, email_message, sms_message)
+            
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -205,6 +252,25 @@ class JobDeleteView(APIView):
             job = Job.objects.get(pk=pk, client=request.user)
         except Job.DoesNotExist:
             return Response({"error": "Job not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Store worker info before deletion for notification
+        assigned_worker = job.assigned_worker
+        
+        # Notify assigned worker if any
+        if assigned_worker:
+            email_subject = f"Job Cancelled: {job.title}"
+            email_message = (
+                f"Dear {assigned_worker.user.first_name},\n\n"
+                f"The job '{job.title}' has been cancelled by the client.\n"
+                f"Job Details:\n"
+                f"- Title: {job.title}\n"
+                f"- Location: {job.location}\n"
+                f"- Description: {job.description}\n\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            sms_message = f"Job '{job.title}' has been cancelled by the client."
+            send_notification(assigned_worker.user, email_subject, email_message, sms_message)
+        
         job.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -212,8 +278,29 @@ class OpenJobListView(APIView):
     permission_classes = [IsAuthenticated, IsWorker]
 
     @swagger_auto_schema(
-        operation_description="List all open jobs for workers.",
-        responses={200: JobSerializer(many=True), 401: 'Unauthorized', 403: 'Forbidden'}
+        operation_description="List all open jobs",
+        responses={
+            200: openapi.Response(
+                description='List of open jobs',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        properties={
+                            'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'title': openapi.Schema(type=openapi.TYPE_STRING),
+                            'location': openapi.Schema(type=openapi.TYPE_STRING),
+                            'skills': openapi.Schema(type=openapi.TYPE_STRING),
+                            'description': openapi.Schema(type=openapi.TYPE_STRING),
+                            'payment_method': openapi.Schema(type=openapi.TYPE_STRING),
+                            'status': openapi.Schema(type=openapi.TYPE_STRING),
+                            'created_at': openapi.Schema(type=openapi.TYPE_STRING, format='date-time')
+                        }
+                    )
+                )
+            ),
+            401: 'Unauthorized'
+        }
     )
     def get(self, request):
         jobs = Job.objects.filter(status='open')
@@ -224,13 +311,18 @@ class JobApplicationView(APIView):
     permission_classes = [IsAuthenticated, IsWorker]
 
     @swagger_auto_schema(
-        operation_description="Apply to an open job.",
+        operation_description="Apply to an open job or withdraw an existing application.",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
             properties={
                 'worker_id': openapi.Schema(
                     type=openapi.TYPE_INTEGER,
                     description='Worker ID (ignored, auto-set to current user)'
+                ),
+                'action': openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    enum=['apply', 'withdraw'],
+                    description='Action to perform'
                 )
             }
         ),
@@ -245,13 +337,39 @@ class JobApplicationView(APIView):
             404: openapi.Response('Not Found')
         }
     )
-    def post(self, request, id): 
+    def post(self, request, id):
         try:
             job = Job.objects.get(pk=id)
         except Job.DoesNotExist:
             logger.error(f"Job {id} not found for application")
             return Response({"error": "Job not found"}, status=status.HTTP_404_NOT_FOUND)
         
+        action = request.data.get('action', 'apply')
+        
+        if action == 'withdraw':
+            try:
+                application = JobApplication.objects.get(
+                    job=job,
+                    worker=request.user.worker,
+                    status='pending'
+                )
+                application.delete()
+                
+                # Notify client about withdrawal
+                email_subject = f"Application Withdrawn: {job.title}"
+                email_message = (
+                    f"Dear {job.client.first_name},\n\n"
+                    f"Worker {request.user.first_name} {request.user.last_name} has withdrawn their application for job: {job.title}.\n\n"
+                    f"Best regards,\nSkillConnect Team"
+                )
+                sms_message = f"Worker {request.user.first_name} has withdrawn their application for job: {job.title}."
+                send_notification(job.client, email_subject, email_message, sms_message)
+                
+                return Response(status=status.HTTP_204_NO_CONTENT)
+            except JobApplication.DoesNotExist:
+                return Response({"error": "No pending application found"}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Handle new application
         data = {
             'job': job.id,
             'worker_id': request.user.worker.id
@@ -313,12 +431,12 @@ class JobRequestView(APIView):
     permission_classes = [IsAuthenticated, IsClient]
 
     @swagger_auto_schema(
-        operation_description="Send a request to a worker for a job application.",
+        operation_description="Send a request to a recommended worker for a job.",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
-            required=['application_id'],
+            required=['worker_id'],
             properties={
-                'application_id': openapi.Schema(type=openapi.TYPE_INTEGER, description='Application ID')
+                'worker_id': openapi.Schema(type=openapi.TYPE_INTEGER, description='Worker ID')
             },
         ),
         responses={
@@ -334,14 +452,17 @@ class JobRequestView(APIView):
             job = Job.objects.get(pk=id, client=request.user)
         except Job.DoesNotExist:
             return Response({"error": "Job not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
+        
         data = request.data.copy()
-        data['application_id'] = data.get('application_id')
-        serializer = JobRequestSerializer(data=data, context={'request': request, 'job_id': id})
+        data['job'] = job.id
+        serializer = JobRequestSerializer(data=data, context={'request': request, 'job': job})
+        
         if serializer.is_valid():
             request_obj = serializer.save()
-            worker = request_obj.application.worker.user
+            worker = request_obj.worker.user
             client = request.user
-            # Notify worker (without contact info)
+            
+            # Notify worker
             email_subject = f"New Job Request for {job.title}"
             email_message = (
                 f"Dear {worker.first_name} {worker.last_name},\n\n"
@@ -358,26 +479,126 @@ class JobRequestView(APIView):
                 f"Log in to SkillConnect to respond."
             )
             send_notification(worker, email_subject, email_message, sms_message)
-            # Notify client (without contact info)
-            email_subject = f"Job Request Sent for {job.title}"
-            email_message = (
-                f"Dear {client.first_name} {client.last_name},\n\n"
-                f"Your request for the job '{job.title}' has been successfully sent to {worker.first_name} {worker.last_name}.\n"
-                f"Job Details:\n"
-                f"- Title: {job.title}\n"
-                f"- Location: {job.location}\n"
-                f"- Description: {job.description}\n\n"
-                f"You will be notified once the worker responds.\n\n"
-                f"Best regards,\nSkillConnect Team"
-            )
-            sms_message = (
-                f"Your request for '{job.title}' has been sent to {worker.first_name} {worker.last_name}. "
-                f"Await their response on SkillConnect."
-            )
-            send_notification(client, email_subject, email_message, sms_message)
+            
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+class JobApplicationResponseView(APIView):
+    permission_classes = [IsAuthenticated, IsClient]
+
+    @swagger_auto_schema(
+        operation_description="Accept or reject a worker's application.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['status'],
+            properties={
+                'status': openapi.Schema(type=openapi.TYPE_STRING, enum=['accepted', 'rejected'])
+            },
+        ),
+        responses={
+            200: JobApplicationSerializer,
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def post(self, request, job_id, application_id):
+        try:
+            job = Job.objects.get(pk=job_id, client=request.user)
+            application = JobApplication.objects.get(pk=application_id, job=job)
+        except (Job.DoesNotExist, JobApplication.DoesNotExist):
+            return Response({"error": "Job or application not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if application.status != 'pending':
+            return Response({"error": "Application has already been processed"}, status=status.HTTP_400_BAD_REQUEST)
+
+        status = request.data.get('status')
+        if status not in ['accepted', 'rejected']:
+            return Response({"error": "Invalid status"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if status == 'accepted':
+            if job.assigned_worker:
+                return Response({"error": "Job already has an assigned worker"}, status=status.HTTP_400_BAD_REQUEST)
+            job.assigned_worker = application.worker
+            job.status = 'in_progress'
+            job.save()
+
+            # Notify worker
+            email_subject = f"Application Accepted for {job.title}"
+            email_message = (
+                f"Dear {application.worker.user.first_name},\n\n"
+                f"Your application for job '{job.title}' has been accepted.\n"
+                f"Contact the client at:\n"
+                f"- Email: {job.client.email}\n"
+                f"- Phone: {job.client.phone_number or 'Not provided'}\n\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            sms_message = f"Your application for '{job.title}' was accepted. Contact client for details."
+            send_notification(application.worker.user, email_subject, email_message, sms_message)
+
+        application.status = status
+        application.save()
+
+        serializer = JobApplicationSerializer(application)
+        return Response(serializer.data)
+
+class ClientFeedbackView(APIView):
+    permission_classes = [IsAuthenticated, IsWorker]
+
+    @swagger_auto_schema(
+        operation_description="Submit feedback for a client after job completion.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['rating'],
+            properties={
+                'rating': openapi.Schema(type=openapi.TYPE_INTEGER, minimum=1, maximum=5),
+                'review': openapi.Schema(type=openapi.TYPE_STRING, nullable=True),
+            },
+        ),
+        responses={
+            201: ClientFeedbackSerializer,
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def post(self, request, job_id):
+        try:
+            job = Job.objects.get(pk=job_id)
+            if job.assigned_worker != request.user.worker:
+                return Response({"error": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
+        except Job.DoesNotExist:
+            return Response({"error": "Job not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = ClientFeedbackSerializer(
+            data=request.data,
+            context={'request': request, 'job': job, 'worker': request.user.worker}
+        )
+        
+        if serializer.is_valid():
+            feedback = serializer.save()
+            
+            # If both client and worker have submitted feedback, close the job
+            if hasattr(job, 'feedback') and hasattr(job, 'client_feedback'):
+                job.status = 'closed'
+                job.save()
+
+            # Notify client
+            email_subject = f"New Feedback for Job: {job.title}"
+            email_message = (
+                f"Dear {job.client.first_name},\n\n"
+                f"Worker {request.user.first_name} has submitted feedback for job: {job.title}.\n"
+                f"Rating: {feedback.rating}/5\n"
+                f"Review: {feedback.review or 'No review provided'}\n\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            sms_message = f"New feedback for job: {job.title}. Rating: {feedback.rating}/5."
+            send_notification(job.client, email_subject, email_message, sms_message)
+
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class JobRequestResponseView(APIView):
     permission_classes = [IsAuthenticated, IsWorker]
@@ -467,10 +688,10 @@ class JobRequestResponseView(APIView):
     
 
 class JobStatusUpdateView(APIView):
-    permission_classes = [IsAuthenticated, IsClient]
+    permission_classes = [IsAuthenticated]
 
     @swagger_auto_schema(
-        operation_description="Update job status to completed.",
+        operation_description="Mark job as completed (requires both client and worker to mark as completed)",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
             required=['status'],
@@ -488,26 +709,56 @@ class JobStatusUpdateView(APIView):
     )
     def put(self, request, pk):
         try:
-            job = Job.objects.get(pk=pk, client=request.user)
+            job = Job.objects.get(pk=pk)
         except Job.DoesNotExist:
-            return Response({"error": "Job not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
-        serializer = JobStatusUpdateSerializer(data=request.data, context={'job': job})
-        if serializer.is_valid():
-            job.status = serializer.validated_data['status']
+            return Response({"error": "Job not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Check if user is either client or worker
+        if request.user != job.client and (not hasattr(request.user, 'worker') or request.user.worker != job.assigned_worker):
+            return Response({"error": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
+
+        # Get or create completion status
+        completion, created = JobCompletion.objects.get_or_create(job=job)
+
+        # Update completion status based on user role
+        if request.user == job.client:
+            if completion.client_completed:
+                return Response({"error": "You have already marked this job as completed"}, status=status.HTTP_400_BAD_REQUEST)
+            completion.mark_client_completed()
+            job.status = 'client_completed'
             job.save()
+            
             # Notify worker
-            email_subject = f"Job Completed: {job.title}"
+            email_subject = f"Job Marked as Completed by Client: {job.title}"
             email_message = (
                 f"Dear {job.assigned_worker.user.first_name},\n\n"
                 f"The client has marked job '{job.title}' as completed.\n"
-                f"You can now request payment via SkillConnect.\n\n"
+                f"Please review and mark the job as completed if you agree.\n\n"
                 f"Best regards,\nSkillConnect Team"
             )
-            sms_message = f"Job {job.title} marked as completed. You can now request payment."
+            sms_message = f"Client marked job {job.title} as completed. Please review and confirm."
             send_notification(job.assigned_worker.user, email_subject, email_message, sms_message)
-            serializer = JobSerializer(job)
-            return Response(serializer.data)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        else:  # Worker
+            if completion.worker_completed:
+                return Response({"error": "You have already marked this job as completed"}, status=status.HTTP_400_BAD_REQUEST)
+            completion.mark_worker_completed()
+            job.status = 'worker_completed'
+            job.save()
+            
+            # Notify client
+            email_subject = f"Job Marked as Completed by Worker: {job.title}"
+            email_message = (
+                f"Dear {job.client.first_name},\n\n"
+                f"The worker has marked job '{job.title}' as completed.\n"
+                f"Please review and mark the job as completed if you agree.\n\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            sms_message = f"Worker marked job {job.title} as completed. Please review and confirm."
+            send_notification(job.client, email_subject, email_message, sms_message)
+
+        serializer = JobSerializer(job)
+        return Response(serializer.data)
 
 class JobPaymentRequestView(APIView):
     permission_classes = [IsAuthenticated, IsWorker]
@@ -603,6 +854,7 @@ class JobFeedbackView(APIView):
             send_notification(job.assigned_worker.user, email_subject, email_message, sms_message)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 class WorkerJobRequestsView(APIView):
     permission_classes = [IsAuthenticated, IsWorker]
 
@@ -855,5 +1107,320 @@ class PaymentCallbackView(APIView):
             logger.error(f'Transaction not found for tx_ref: {tx_ref}')
             return Response(
                 {'error': 'Transaction not found'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+class JobReviewsView(APIView):
+    permission_classes = [IsAuthenticated]
+    @swagger_auto_schema(
+        operation_description="Get all reviews for a specific job.",
+        responses={
+            200: openapi.Response(
+                description='List of reviews',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'worker_feedback': openapi.Schema(
+                            type=openapi.TYPE_OBJECT,
+                            properties={
+                                'rating': openapi.Schema(type=openapi.TYPE_INTEGER),
+                                'review': openapi.Schema(type=openapi.TYPE_STRING),
+                                'created_at': openapi.Schema(type=openapi.TYPE_STRING),
+                            }
+                        ),
+                        'client_feedback': openapi.Schema(
+                            type=openapi.TYPE_OBJECT,
+                            properties={
+                                'rating': openapi.Schema(type=openapi.TYPE_INTEGER),
+                                'review': openapi.Schema(type=openapi.TYPE_STRING),
+                                'created_at': openapi.Schema(type=openapi.TYPE_STRING),
+                            }
+                        )
+                    }
+                )
+            ),
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def get(self, request, job_id):
+        try:
+            job = Job.objects.get(id=job_id)
+            
+            # Check if user has permission to view reviews
+            if not (request.user == job.client or 
+                   (job.assigned_worker and request.user == job.assigned_worker.user)):
+                return Response(
+                    {"error": "Not authorized to view these reviews"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            reviews = {
+                'worker_feedback': None,
+                'client_feedback': None
+            }
+            
+            # Get worker feedback if exists
+            if hasattr(job, 'feedback'):
+                reviews['worker_feedback'] = {
+                    'rating': job.feedback.rating,
+                    'review': job.feedback.review,
+                    'created_at': job.feedback.created_at
+                }
+            
+            # Get client feedback if exists
+            if hasattr(job, 'client_feedback'):
+                reviews['client_feedback'] = {
+                    'rating': job.client_feedback.rating,
+                    'review': job.client_feedback.review,
+                    'created_at': job.client_feedback.created_at
+                }
+            
+            return Response(reviews, status=status.HTTP_200_OK)
+        except Job.DoesNotExist:
+            return Response(
+                {"error": "Job not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+class ClientJobCompletionView(APIView):
+    permission_classes = [IsAuthenticated, IsClient]
+
+    @swagger_auto_schema(
+        operation_description="Client marks a job as completed",
+        responses={
+            200: JobSerializer,
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def post(self, request, job_id):
+        try:
+            job = Job.objects.get(pk=job_id, client=request.user)
+        except Job.DoesNotExist:
+            return Response({"error": "Job not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Get or create completion status
+        completion, created = JobCompletion.objects.get_or_create(job=job)
+
+        if completion.client_completed:
+            return Response({"error": "You have already marked this job as completed"}, status=status.HTTP_400_BAD_REQUEST)
+
+        completion.mark_client_completed()
+        job.status = 'client_completed'
+        job.save()
+        
+        # Notify worker
+        email_subject = f"Job Marked as Completed by Client: {job.title}"
+        email_message = (
+            f"Dear {job.assigned_worker.user.first_name},\n\n"
+            f"The client has marked job '{job.title}' as completed.\n"
+            f"Please review and mark the job as completed if you agree.\n\n"
+            f"Best regards,\nSkillConnect Team"
+        )
+        sms_message = f"Client marked job {job.title} as completed. Please review and confirm."
+        send_notification(job.assigned_worker.user, email_subject, email_message, sms_message)
+
+        serializer = JobSerializer(job)
+        return Response(serializer.data)
+
+class WorkerJobCompletionView(APIView):
+    permission_classes = [IsAuthenticated, IsWorker]
+
+    @swagger_auto_schema(
+        operation_description="Worker marks a job as completed",
+        responses={
+            200: JobSerializer,
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def post(self, request, job_id):
+        try:
+            job = Job.objects.get(pk=job_id, assigned_worker=request.user.worker)
+        except Job.DoesNotExist:
+            return Response({"error": "Job not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Get or create completion status
+        completion, created = JobCompletion.objects.get_or_create(job=job)
+
+        if completion.worker_completed:
+            return Response({"error": "You have already marked this job as completed"}, status=status.HTTP_400_BAD_REQUEST)
+
+        completion.mark_worker_completed()
+        job.status = 'worker_completed'
+        job.save()
+        
+        # Notify client
+        email_subject = f"Job Marked as Completed by Worker: {job.title}"
+        email_message = (
+            f"Dear {job.client.first_name},\n\n"
+            f"The worker has marked job '{job.title}' as completed.\n"
+            f"Please review and mark the job as completed if you agree.\n\n"
+            f"Best regards,\nSkillConnect Team"
+        )
+        sms_message = f"Worker marked job {job.title} as completed. Please review and confirm."
+        send_notification(job.client, email_subject, email_message, sms_message)
+
+        serializer = JobSerializer(job)
+        return Response(serializer.data)
+
+class DisputeCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_description="Create a new dispute for a job",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['reported_user_id', 'dispute_type', 'description'],
+            properties={
+                'reported_user_id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                'dispute_type': openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    enum=['payment', 'quality', 'behavior', 'other']
+                ),
+                'description': openapi.Schema(type=openapi.TYPE_STRING)
+            }
+        ),
+        responses={
+            201: DisputeSerializer,
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def post(self, request, job_id):
+        try:
+            job = Job.objects.get(id=job_id)
+            reported_user = User.objects.get(id=request.data.get('reported_user_id'))
+        except (Job.DoesNotExist, User.DoesNotExist):
+            return Response(
+                {"error": "Job or user not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = DisputeSerializer(
+            data=request.data,
+            context={
+                'request': request,
+                'job': job,
+                'reported_user': reported_user
+            }
+        )
+
+        if serializer.is_valid():
+            dispute = serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class DisputeListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_description="List all disputes for the authenticated user",
+        responses={
+            200: DisputeSerializer(many=True),
+            401: 'Unauthorized'
+        }
+    )
+    def get(self, request):
+        disputes = Dispute.objects.filter(
+            models.Q(reported_by=request.user) | models.Q(reported_user=request.user)
+        )
+        serializer = DisputeSerializer(disputes, many=True)
+        return Response(serializer.data)
+
+class DisputeDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_description="Get details of a specific dispute",
+        responses={
+            200: DisputeSerializer,
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def get(self, request, dispute_id):
+        try:
+            dispute = Dispute.objects.get(id=dispute_id)
+            if request.user != dispute.reported_by and request.user != dispute.reported_user:
+                return Response(
+                    {"error": "You don't have permission to view this dispute"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            serializer = DisputeSerializer(dispute)
+            return Response(serializer.data)
+        except Dispute.DoesNotExist:
+            return Response(
+                {"error": "Dispute not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+class AdminDisputeListView(APIView):
+    permission_classes = [IsAuthenticated, IsSuperuser]
+
+    @swagger_auto_schema(
+        operation_description="List all disputes (admin only)",
+        responses={
+            200: DisputeSerializer(many=True),
+            401: 'Unauthorized',
+            403: 'Forbidden'
+        }
+    )
+    def get(self, request):
+        disputes = Dispute.objects.all()
+        serializer = DisputeSerializer(disputes, many=True)
+        return Response(serializer.data)
+
+class AdminDisputeResolveView(APIView):
+    permission_classes = [IsAuthenticated, IsSuperuser]
+
+    @swagger_auto_schema(
+        operation_description="Resolve a dispute (admin only)",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['resolution'],
+            properties={
+                'resolution': openapi.Schema(type=openapi.TYPE_STRING)
+            }
+        ),
+        responses={
+            200: DisputeSerializer,
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Not Found'
+        }
+    )
+    def post(self, request, dispute_id):
+        try:
+            dispute = Dispute.objects.get(id=dispute_id)
+            if dispute.status in ['resolved', 'closed']:
+                return Response(
+                    {"error": "This dispute has already been resolved"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            resolution = request.data.get('resolution')
+            if not resolution:
+                return Response(
+                    {"error": "Resolution text is required"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            dispute.mark_as_resolved(request.user, resolution)
+            serializer = DisputeSerializer(dispute)
+            return Response(serializer.data)
+        except Dispute.DoesNotExist:
+            return Response(
+                {"error": "Dispute not found"},
                 status=status.HTTP_404_NOT_FOUND
             )

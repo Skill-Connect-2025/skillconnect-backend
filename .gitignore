@@ -12,3 +12,17 @@ apps/jobs/migrations/
 apps/jobs/migrations/__init__.py
 apps/jobs/migrations/0001_initial.py
 apps/jobs/migrations/0002_auto_20231001_1234.py
+
+apps/recommendations/migrations/
+apps/recommendations/migrations/__init__.py
+apps/recommendations/migrations/0001_initial.py
+
+apps/management/migrations/
+apps/management/migrations/__init__.py
+apps/management/migrations/0001_initial.py
+
+TESTING.md
+
+
+API_UPDATE_WORKER_PROFILE.md
+

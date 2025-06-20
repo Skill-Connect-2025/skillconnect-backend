@@ -7,20 +7,23 @@ from drf_yasg import openapi
 from .serializers import (
     SelectSignupMethodSerializer, SignupRequestSerializer, VerifyAndCompleteSerializer,
     LoginSerializer, PasswordResetRequestSerializer, PasswordResetConfirmSerializer,
-    ClientProfileSerializer, UserSerializer, WorkerProfileSerializer
+    ClientProfileSerializer, UserSerializer, WorkerProfileSerializer, FeedbackSerializer
 )
-from apps.jobs.models import JobApplication
-from apps.jobs.serializers import JobApplicationSerializer
-from core.utils import IsWorker
+from apps.jobs.models import Job, JobApplication
+from apps.jobs.serializers import JobApplicationSerializer, JobSerializer
+from core.utils import IsWorker, IsClient
 from django.core.mail import send_mail
 from django.contrib.auth import get_user_model
 from .permissions import RoleBasedPermission
-from .models import VerificationToken
+from .models import VerificationToken, Worker
 from django.utils import timezone
 from twilio.rest import Client as TwilioClient 
 from django.conf import settings
 import random
 import logging
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from django.db.models import Q
 
 User = get_user_model()
 logger = logging.getLogger('django')
@@ -407,7 +410,22 @@ class UserApplicationsView(APIView):
     @swagger_auto_schema(
         operation_description="List all applications submitted by the worker.",
         responses={
-            200: JobApplicationSerializer(many=True),
+            200: openapi.Response(
+                description='List of applications',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        properties={
+                            'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'job': openapi.Schema(type=openapi.TYPE_OBJECT),
+                            'worker': openapi.Schema(type=openapi.TYPE_OBJECT),
+                            'status': openapi.Schema(type=openapi.TYPE_STRING),
+                            'applied_at': openapi.Schema(type=openapi.TYPE_STRING, format='date-time')
+                        }
+                    )
+                )
+            ),
             401: openapi.Response(
                 description='Unauthorized',
                 schema=openapi.Schema(type=openapi.TYPE_OBJECT, properties={'detail': openapi.Schema(type=openapi.TYPE_STRING)})
@@ -421,4 +439,301 @@ class UserApplicationsView(APIView):
     def get(self, request):
         applications = JobApplication.objects.filter(worker=request.user.worker)
         serializer = JobApplicationSerializer(applications, many=True)
+        return Response(serializer.data)
+
+class UserRatingStatsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_description="Get rating statistics for a user (worker or client).",
+        responses={
+            200: openapi.Response(
+                description='Rating statistics',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'average_rating': openapi.Schema(type=openapi.TYPE_NUMBER),
+                        'total_ratings': openapi.Schema(type=openapi.TYPE_INTEGER),
+                        'rating_breakdown': openapi.Schema(
+                            type=openapi.TYPE_OBJECT,
+                            properties={
+                                '5_star': openapi.Schema(type=openapi.TYPE_NUMBER),
+                                '4_star': openapi.Schema(type=openapi.TYPE_NUMBER),
+                                '3_star': openapi.Schema(type=openapi.TYPE_NUMBER),
+                                '2_star': openapi.Schema(type=openapi.TYPE_NUMBER),
+                                '1_star': openapi.Schema(type=openapi.TYPE_NUMBER),
+                            }
+                        )
+                    }
+                )
+            ),
+            401: 'Unauthorized',
+            404: 'Not Found'
+        }
+    )
+    def get(self, request, user_id=None):
+        try:
+            # If no user_id provided, return stats for the authenticated user
+            if user_id is None:
+                user = request.user
+            else:
+                user = User.objects.get(id=user_id)
+            
+            stats = user.get_rating_stats()
+            return Response(stats, status=status.HTTP_200_OK)
+        except User.DoesNotExist:
+            return Response(
+                {"error": "User not found"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+class UserReviewsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_description="Get all reviews for a user (worker or client).",
+        responses={
+            200: openapi.Response(
+                description='List of reviews',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        properties={
+                            'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'job': openapi.Schema(type=openapi.TYPE_OBJECT),
+                            'rating': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'review': openapi.Schema(type=openapi.TYPE_STRING),
+                            'created_at': openapi.Schema(type=openapi.TYPE_STRING),
+                            'reviewer': openapi.Schema(type=openapi.TYPE_OBJECT),
+                        }
+                    )
+                )
+            ),
+            401: 'Unauthorized',
+            404: 'Not Found'
+        }
+    )
+    def get(self, request, user_id=None):
+        try:
+            if user_id is None:
+                user = request.user
+            else:
+                user = User.objects.get(id=user_id)
+            
+            reviews = []
+            if user.is_worker:
+                # Get feedback from clients
+                reviews.extend(user.worker.feedback.all())
+                # Get feedback from workers (as client)
+                reviews.extend(user.received_feedback.all())
+            elif user.is_client:
+                # Get feedback from workers
+                reviews.extend(user.received_feedback.all())
+            
+            serializer = FeedbackSerializer(reviews, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except User.DoesNotExist:
+            return Response(
+                {"error": "User not found"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+class RecentReviewsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_description="Get recent reviews for a user (worker or client).",
+        responses={
+            200: openapi.Response(
+                description='List of recent reviews',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        properties={
+                            'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'job': openapi.Schema(type=openapi.TYPE_OBJECT),
+                            'rating': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'review': openapi.Schema(type=openapi.TYPE_STRING),
+                            'created_at': openapi.Schema(type=openapi.TYPE_STRING),
+                            'reviewer': openapi.Schema(type=openapi.TYPE_OBJECT),
+                        }
+                    )
+                )
+            ),
+            401: 'Unauthorized',
+            404: 'Not Found'
+        }
+    )
+    def get(self, request, user_id=None):
+        try:
+            if user_id is None:
+                user = request.user
+            else:
+                user = User.objects.get(id=user_id)
+            
+            reviews = []
+            if user.is_worker:
+                # Get feedback from clients
+                reviews.extend(user.worker.feedback.all())
+                # Get feedback from workers (as client)
+                reviews.extend(user.received_feedback.all())
+            elif user.is_client:
+                # Get feedback from workers
+                reviews.extend(user.received_feedback.all())
+            
+            # Sort by created_at and limit to 5 most recent
+            reviews = sorted(reviews, key=lambda x: x.created_at, reverse=True)[:5]
+            
+            serializer = FeedbackSerializer(reviews, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except User.DoesNotExist:
+            return Response(
+                {"error": "User not found"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+class PaymentPreferenceView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_description="Get or update payment method preference",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'payment_method': openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    enum=['cash', 'chapa'],
+                    description='Preferred payment method'
+                )
+            }
+        ),
+        responses={
+            200: openapi.Response(
+                description='Payment preference updated',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'payment_method': openapi.Schema(type=openapi.TYPE_STRING)
+                    }
+                )
+            ),
+            400: 'Bad Request',
+            401: 'Unauthorized'
+        }
+    )
+    def put(self, request):
+        payment_method = request.data.get('payment_method')
+        if payment_method not in ['cash', 'chapa']:
+            return Response(
+                {"error": "Invalid payment method. Must be 'cash' or 'chapa'"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if request.user.is_client:
+            request.user.client.payment_method_preference = payment_method
+            request.user.client.save()
+        elif request.user.is_worker:
+            request.user.worker.payment_method_preference = payment_method
+            request.user.worker.save()
+        else:
+            return Response(
+                {"error": "User must be either client or worker"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return Response({"payment_method": payment_method})
+
+    def get(self, request):
+        if request.user.is_client:
+            preference = request.user.client.payment_method_preference
+        elif request.user.is_worker:
+            preference = request.user.worker.payment_method_preference
+        else:
+            return Response(
+                {"error": "User must be either client or worker"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return Response({"payment_method": preference})
+
+class WorkersByPaymentMethodView(APIView):
+    permission_classes = [IsAuthenticated, IsClient]
+
+    @swagger_auto_schema(
+        operation_description="Get workers filtered by payment method preference",
+        responses={
+            200: openapi.Response(
+                description='List of workers with matching payment preference',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        properties={
+                            'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'user': openapi.Schema(
+                                type=openapi.TYPE_OBJECT,
+                                properties={
+                                    'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                                    'username': openapi.Schema(type=openapi.TYPE_STRING),
+                                    'first_name': openapi.Schema(type=openapi.TYPE_STRING),
+                                    'last_name': openapi.Schema(type=openapi.TYPE_STRING),
+                                    'email': openapi.Schema(type=openapi.TYPE_STRING),
+                                    'phone_number': openapi.Schema(type=openapi.TYPE_STRING)
+                                }
+                            ),
+                            'profile_pic': openapi.Schema(type=openapi.TYPE_STRING, format='uri'),
+                            'location': openapi.Schema(type=openapi.TYPE_STRING),
+                            'payment_method_preference': openapi.Schema(type=openapi.TYPE_STRING)
+                        }
+                    )
+                )
+            ),
+            401: 'Unauthorized',
+            403: 'Forbidden'
+        }
+    )
+    def get(self, request):
+        client_preference = request.user.client.payment_method_preference
+        workers = Worker.objects.filter(payment_method_preference=client_preference)
+        serializer = WorkerProfileSerializer(workers, many=True, context={'request': request})
+        return Response(serializer.data)
+
+class JobsByPaymentMethodView(APIView):
+    permission_classes = [IsAuthenticated, IsWorker]
+
+    @swagger_auto_schema(
+        operation_description="Get jobs filtered by payment method preference",
+        responses={
+            200: openapi.Response(
+                description='List of jobs with matching payment preference',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        properties={
+                            'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'title': openapi.Schema(type=openapi.TYPE_STRING),
+                            'location': openapi.Schema(type=openapi.TYPE_STRING),
+                            'skills': openapi.Schema(type=openapi.TYPE_STRING),
+                            'description': openapi.Schema(type=openapi.TYPE_STRING),
+                            'payment_method': openapi.Schema(type=openapi.TYPE_STRING),
+                            'status': openapi.Schema(type=openapi.TYPE_STRING),
+                            'created_at': openapi.Schema(type=openapi.TYPE_STRING, format='date-time')
+                        }
+                    )
+                )
+            ),
+            401: 'Unauthorized',
+            403: 'Forbidden'
+        }
+    )
+    def get(self, request):
+        worker_preference = request.user.worker.payment_method_preference
+        jobs = Job.objects.filter(
+            status='open',
+            client__payment_method_preference=worker_preference
+        )
+        serializer = JobSerializer(jobs, many=True)
         return Response(serializer.data)
