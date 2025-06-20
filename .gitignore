@@ -23,3 +23,6 @@ apps/management/migrations/0001_initial.py
 
 TESTING.md
 
+
+API_UPDATE_WORKER_PROFILE.md
+

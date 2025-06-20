@@ -210,6 +210,16 @@ EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='')
 DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL')
 
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+
+# Add timeout settings to prevent hanging
+EMAIL_TIMEOUT = 30
+
+# Additional SMTP settings for better reliability
+EMAIL_SSL_CERTFILE = None
+EMAIL_SSL_KEYFILE = None
+
+
 CHAPA_SECRET_KEY = env('CHAPA_SECRET_KEY')
 CHAPA_PUBLIC_KEY = env('CHAPA_PUBLIC_KEY')
 CHAPA_BASE_URL = env('CHAPA_BASE_URL')

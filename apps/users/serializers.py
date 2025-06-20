@@ -10,13 +10,13 @@ import random
 from django.core.mail import send_mail
 from django.conf import settings
 from twilio.rest import Client as TwilioClient
-from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from datetime import timedelta
 from apps.jobs.models import Job, JobRequest, Feedback
 from apps.jobs.feedback_serializers import FeedbackSerializer
-
 import logging
+import socket 
+
 
 User = get_user_model()
 logger = logging.getLogger('django')
@@ -47,11 +47,12 @@ class SignupRequestSerializer(serializers.Serializer):
 
     def validate(self, data):
         user_id = data.get('user_id')
-        identifier = data.get('identifier').strip()
+        identifier = data.get('identifier').strip().lower()
         try:
             user = User.objects.get(id=user_id, is_active=False)
         except User.DoesNotExist:
             raise serializers.ValidationError({"error": "User not found or already verified."})
+
         if user.signup_method == 'email':
             if '@' not in identifier or '.' not in identifier:
                 raise serializers.ValidationError({"identifier": "Invalid email format."})
@@ -64,6 +65,7 @@ class SignupRequestSerializer(serializers.Serializer):
                 raise serializers.ValidationError({"identifier": "Phone number already in use."})
         else:
             raise serializers.ValidationError({"error": "Invalid signup method."})
+
         data['user'] = user
         data['identifier'] = identifier
         return data
@@ -77,29 +79,68 @@ class SignupRequestSerializer(serializers.Serializer):
             user.phone_number = None
         else:
             user.phone_number = identifier
-            user.email = user.email or 'temp@skillconnect.com'
+            user.email = None  # Ensure email is cleared for phone-based signup
         user.save()
         logger.info(f"Stored identifier for user {user.id}: email={user.email}, phone={user.phone_number}")
         code = str(random.randint(100000, 999999))
-        VerificationToken.objects.create(user=user, code=code, purpose='registration')
+        VerificationToken.objects.create(
+            user=user,
+            code=code,
+            purpose='registration',
+            expires_at=timezone.now() + timedelta(minutes=10)
+        )
         if user.signup_method == 'email':
-            subject = "SkillConnect Verification Code"
-            message = f"Your verification code is: {code}\nThis code expires in 10 minutes."
-            send_mail(
-                subject,
-                message,
-                settings.DEFAULT_FROM_EMAIL,
-                [identifier],
-                fail_silently=False,
-            )
+            try:
+                logger.debug(f"Sending email from {settings.DEFAULT_FROM_EMAIL} to {identifier}")
+                send_mail(
+                    subject="SkillConnect Verification Code",
+                    message=f"Your verification code is: {code}\nThis code expires in 10 minutes.",
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[identifier],
+                    fail_silently=False,
+                )
+                logger.info(f"Verification email sent to {identifier}")
+            except socket.gaierror as e:
+                logger.error(f"DNS resolution failed for {identifier}: {str(e)}")
+                if user.phone_number:
+                    try:
+                        twilio_client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+                        sms_message = f"Your SkillConnect verification code is: {code}"
+                        twilio_client.messages.create(
+                            body=sms_message,
+                            from_=settings.TWILIO_PHONE_NUMBER,
+                            to=user.phone_number
+                        )
+                        logger.info(f"Fallback SMS sent to {user.phone_number}")
+                    except Exception as sms_e:
+                        logger.error(f"Failed to send fallback SMS to {user.phone_number}: {str(sms_e)}")
+                        raise serializers.ValidationError(
+                            {"non_field_errors": ["Failed to send verification code. Please try again later."]}
+                        )
+                else:
+                    raise serializers.ValidationError(
+                        {"non_field_errors": ["Cannot connect to email server. Please check your network or try again later."]}
+                    )
+            except Exception as e:
+                logger.error(f"Failed to send email to {identifier}: {str(e)}")
+                raise serializers.ValidationError(
+                    {"non_field_errors": ["Failed to send verification email. Please try again later."]}
+                )
         else:
-            twilio_client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-            message = f"Your SkillConnect verification code is: {code}"
-            twilio_client.messages.create(
-                body=message,
-                from_=settings.TWILIO_PHONE_NUMBER,
-                to=identifier
-            )
+            try:
+                twilio_client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+                message = f"Your SkillConnect verification code is: {code}"
+                twilio_client.messages.create(
+                    body=message,
+                    from_=settings.TWILIO_PHONE_NUMBER,
+                    to=identifier
+                )
+                logger.info(f"SMS sent to {identifier}")
+            except Exception as e:
+                logger.error(f"Failed to send SMS to {identifier}: {str(e)}")
+                raise serializers.ValidationError(
+                    {"non_field_errors": ["Failed to send verification SMS. Please try again later."]}
+                )
         logger.info(f"Verification code sent for user {user.id}: {identifier}")
         return user
 
@@ -131,14 +172,18 @@ class VerifyAndCompleteSerializer(serializers.Serializer):
     )
 
     def validate(self, data):
-        user = User.objects.filter(id=data['user_id']).first()
-        if not user:
-            raise serializers.ValidationError("User not found.")
+        try:
+            user = User.objects.get(id=data['user_id'], is_active=False)
+        except User.DoesNotExist:
+            raise serializers.ValidationError({"error": "User not found or already verified."})
+
         if user.is_verified:
-            raise serializers.ValidationError("User already verified.")
+            raise serializers.ValidationError({"error": "User already verified."})
+
         if not user.email and not user.phone_number:
             logger.error(f"User {user.id} has no email or phone_number set")
-            raise serializers.ValidationError("Email or phone number must be set. Please request a verification code.")
+            raise serializers.ValidationError({"error": "Email or phone number must be set. Please request a verification code."})
+
         token = VerificationToken.objects.filter(
             user=user,
             code=data['code'],
@@ -147,17 +192,22 @@ class VerifyAndCompleteSerializer(serializers.Serializer):
             is_used=False
         ).first()
         if not token:
-            raise serializers.ValidationError("Invalid or expired verification code.")
+            raise serializers.ValidationError({"error": "Invalid or expired verification code."})
+
         if data['password'] != data['confirm_password']:
             raise serializers.ValidationError({"confirm_password": "Passwords do not match. Please ensure both passwords are identical."})
+
         try:
             validate_password(data['password'], user)
         except Exception as e:
             raise serializers.ValidationError({"password": list(e.messages)})
+
         if not data['first_name'].replace(' ', '').isalpha():
             raise serializers.ValidationError({"first_name": "First name should only contain letters."})
+
         if not data['last_name'].replace(' ', '').isalpha():
             raise serializers.ValidationError({"last_name": "Last name should only contain letters."})
+
         return data
 
     def save(self):
@@ -176,9 +226,11 @@ class VerifyAndCompleteSerializer(serializers.Serializer):
         user.is_verified = True
         user.is_active = True
         user.save()
+
         if not user.check_password(self.validated_data['password']):
             logger.error(f"Password hashing failed for user {user.id}")
-            raise serializers.ValidationError("Failed to set password. Please try again.")
+            raise serializers.ValidationError({"error": "Failed to set password. Please try again."})
+
         token = VerificationToken.objects.get(
             user=user,
             code=self.validated_data['code'],
@@ -186,13 +238,16 @@ class VerifyAndCompleteSerializer(serializers.Serializer):
         )
         token.is_used = True
         token.save()
+
         role = self.validated_data['role']
         if role == 'worker':
             Worker.objects.create(user=user, has_experience=False)
         else:
             Client.objects.create(user=user)
+
         logger.info(f"User {user.id} completed signup: email={user.email}, role={role}")
         return user
+
 
 class LoginSerializer(serializers.Serializer):
     identifier = serializers.CharField(max_length=255, trim_whitespace=True)
@@ -499,10 +554,11 @@ class WorkerProfileSerializer(serializers.Serializer):
         if not data.get('target_jobs'):
             raise serializers.ValidationError("At least one target job is required.")
         user = self.context['request'].user
-        if not user.email and not data.get('email'):
-            raise serializers.ValidationError("Email is required if not set during signup.")
-        if not user.phone_number and not data.get('phone_number'):
-            raise serializers.ValidationError("Phone number is required if not set during signup.")
+        # Only require at least one of email or phone number
+        email = data.get('email') or getattr(user, 'email', None)
+        phone = data.get('phone_number') or getattr(user, 'phone_number', None)
+        if not email and not phone:
+            raise serializers.ValidationError("At least one of email or phone number is required.")
         return data
 
     def update(self, instance, validated_data):
