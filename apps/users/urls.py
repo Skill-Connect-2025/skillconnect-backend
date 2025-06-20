@@ -3,7 +3,7 @@ from rest_framework.authtoken.views import obtain_auth_token
 from .views import (
     AuthLoginView, AuthSignupInitiateView, AuthSignupRequestCodeView,
     AuthSignupCompleteView, AuthPasswordResetView, AuthPasswordResetConfirmView,
-    UserProfileView, UserProfileClientView, UserProfileWorkerView, UserApplicationsView,
+    UserProfileView, UserProfileClientView, UserProfileWorkerView, 
     UserRatingStatsView, UserReviewsView, RecentReviewsView, PaymentPreferenceView,
     WorkersByPaymentMethodView, JobsByPaymentMethodView
 )
@@ -23,7 +23,6 @@ urlpatterns = [
     path('users/profile/', UserProfileView.as_view(), name='user_profile'),
     path('users/profile/client/', UserProfileClientView.as_view(), name='user_profile_client'),
     path('users/profile/worker/', UserProfileWorkerView.as_view(), name='user_profile_worker'),
-    path('users/my-applications/', UserApplicationsView.as_view(), name='user_my_applications'),
     
     # Payment Preferences
     path('users/payment-preference/', PaymentPreferenceView.as_view(), name='payment_preference'),

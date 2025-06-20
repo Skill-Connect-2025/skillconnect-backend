@@ -22,7 +22,7 @@ class JobImageSerializer(serializers.ModelSerializer):
         fields = ['id', 'image']
 
 class WorkerProfileSerializer(serializers.ModelSerializer):
-    user = UserSerializer(read_only=True)
+    user = serializers.SerializerMethodField()
 
     class Meta:
         model = Worker
@@ -33,9 +33,51 @@ class WorkerProfileSerializer(serializers.ModelSerializer):
         ]
         ref_name = 'JobsWorkerProfile'
 
+    def get_user(self, obj):
+        # Include sensitive info only when appropriate (e.g., after acceptance)
+        user = obj.user
+        return {
+            'id': user.id,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'email': user.email,
+            'phone_number': user.phone_number or 'Not provided'
+        }
+
+class PublicWorkerProfileSerializer(serializers.ModelSerializer):
+    rating_stats = serializers.SerializerMethodField()
+    user = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Worker
+        fields = ['id', 'user', 'skills', 'location', 'profile_pic', 'rating_stats']
+
+    def get_user(self, obj):
+        # Only include first_name and last_name, exclude email/phone
+        user = obj.user
+        return {
+            'id': user.id,
+            'first_name': user.first_name,
+            'last_name': user.last_name
+        }
+
+    def get_rating_stats(self, obj):
+        # Calculate rating stats from Feedback and ClientFeedback
+        try:
+            worker_ratings = Feedback.objects.filter(job__assigned_worker=obj).aggregate(
+                average_rating=Avg('rating'), rating_count=Count('rating')
+            )
+            stats = {
+                'average_rating': worker_ratings['average_rating'] or 0.0,
+                'rating_count': worker_ratings['rating_count'] or 0
+            }
+            return stats
+        except Exception as e:
+            logger.error(f"Error calculating rating_stats for worker {obj.id}: {str(e)}")
+            return {'average_rating': 0.0, 'rating_count': 0}
 
 class JobApplicationSerializer(serializers.ModelSerializer):
-    worker = WorkerProfileSerializer(read_only=True)
+    worker = PublicWorkerProfileSerializer(read_only=True)
     worker_id = serializers.PrimaryKeyRelatedField(
         queryset=Worker.objects.all(), write_only=True, source='worker'
     )
@@ -43,29 +85,21 @@ class JobApplicationSerializer(serializers.ModelSerializer):
     class Meta:
         model = JobApplication
         fields = ['id', 'job', 'worker', 'worker_id', 'status', 'applied_at']
-        read_only_fields = ['status', 'applied_at'] 
+        read_only_fields = ['status', 'applied_at']
 
     def validate(self, data):
-        job = self.context.get('job') 
+        job = self.context.get('job')
         worker = data['worker']
-        logger.debug(f"Validating application: job={job.id}, worker={worker.id}")
         if job.status != 'open':
-            logger.error(f"Job {job.id} is not open")
             raise serializers.ValidationError("Cannot apply to a non-open job.")
         if JobApplication.objects.filter(job=job, worker=worker).exists():
-            logger.error(f"Worker {worker.id} already applied to job {job.id}")
             raise serializers.ValidationError("You have already applied to this job.")
-        if JobRequest.objects.filter(
-            application__worker=worker,
-            status='pending'
-        ).exists():
-            logger.error(f"Worker {worker.id} has pending requests")
-            raise serializers.ValidationError("You have pending job requests. Please respond to them first.")
+        # Removed validation for pending job requests
         return data
 
     def create(self, validated_data):
-        job = self.context.get('job')  
-        validated_data['job'] = job  
+        job = self.context.get('job')
+        validated_data['job'] = job
         return super().create(validated_data)
 
 
@@ -197,14 +231,12 @@ class PaymentRequestSerializer(serializers.ModelSerializer):
 
 
 class JobSerializer(serializers.ModelSerializer):
-    # Read-only fields
     category = CategorySerializer(read_only=True)
     images = JobImageSerializer(many=True, read_only=True)
     applications = JobApplicationSerializer(many=True, read_only=True)
     assigned_worker = WorkerProfileSerializer(read_only=True)
     status = serializers.ChoiceField(choices=JOB_STATUS_CHOICES, read_only=True)
     
-    # Write-only fields
     category_id = serializers.PrimaryKeyRelatedField(
         queryset=Category.objects.all(), source='category', write_only=True
     )
@@ -216,7 +248,6 @@ class JobSerializer(serializers.ModelSerializer):
         default=[]
     )
     
-    # Regular fields
     payment_method = serializers.ChoiceField(choices=PAYMENT_METHOD_CHOICES)
 
     class Meta:
@@ -231,10 +262,6 @@ class JobSerializer(serializers.ModelSerializer):
             'id', 'client', 'status', 'created_at', 'updated_at',
             'images', 'applications', 'assigned_worker'
         ]
-        extra_kwargs = {
-            'category_id': {'write_only': True},
-            'uploaded_images': {'write_only': True}
-        }
 
     def create(self, validated_data):
         uploaded_images = validated_data.pop('uploaded_images', [])
