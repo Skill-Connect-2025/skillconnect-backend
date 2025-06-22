@@ -8,6 +8,7 @@ router.register(r'notification-logs', views.NotificationLogViewSet)
 router.register(r'analytics', views.SystemAnalyticsViewSet, basename='analytics')
 router.register(r'disputes', views.DisputeManagementViewSet, basename='disputes')
 router.register(r'management-logs', views.ManagementLogViewSet)
+from jobs.views import AdminDisputeListView, AdminDisputeResolveView
 
 urlpatterns = [
     path('', include(router.urls)),
@@ -28,5 +29,9 @@ urlpatterns = [
     path('notifications/templates/', views.NotificationTemplateView.as_view(), name='notification-templates'),
     path('notifications/metrics/', views.NotificationMetricsView.as_view(), name='notification-metrics'),
     path('notifications/broadcast/', views.BroadcastNotificationViewSet.as_view({'post': 'create'}), name='broadcast-notification'),
+
+    # Admin Dispute URLs
+    path('admin/disputes/', AdminDisputeListView.as_view(), name='admin_list_disputes'),
+    path('admin/disputes/<int:dispute_id>/resolve/', AdminDisputeResolveView.as_view(), name='admin_resolve_dispute'),
     
 ]

@@ -8,7 +8,7 @@ from .views import (
     PaymentConfirmView, JobApplicationResponseView, JobReviewsView,
     ClientJobCompletionView, WorkerJobCompletionView,
     DisputeCreateView, DisputeListView, DisputeDetailView,
-    AdminDisputeListView, AdminDisputeResolveView, UserApplicationsView
+    UserApplicationsView
 )
 
 urlpatterns = [
@@ -41,7 +41,5 @@ urlpatterns = [
     path('disputes/', DisputeListView.as_view(), name='list_disputes'),
     path('disputes/<int:dispute_id>/', DisputeDetailView.as_view(), name='dispute_detail'),
     
-    # Admin Dispute URLs
-    path('admin/disputes/', AdminDisputeListView.as_view(), name='admin_list_disputes'),
-    path('admin/disputes/<int:dispute_id>/resolve/', AdminDisputeResolveView.as_view(), name='admin_resolve_dispute'),
+    
 ]
