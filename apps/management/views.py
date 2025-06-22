@@ -21,6 +21,13 @@ from django.db.models import Q
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from .serializers import NotificationLogSerializer, SystemAnalyticsSerializer, BroadcastNotificationSerializer, ManagementLogSerializer, NotificationTemplateSerializer
+from apps.recommendations.models import WeightConfig
+from apps.jobs.models import Category
+from apps.management.models import ManagementLog
+from apps.recommendations.utils import MatchEngine
+from apps.recommendations.models import MatchResult
+from apps.recommendations.signals import invalidate_worker_matches, invalidate_job_matches
+from apps.recommendations.serializers import MatchResultSerializer
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -1055,3 +1062,125 @@ class NotificationMetricsView(APIView):
             'invalid_recipient': failed_logs.filter(error_message__icontains='invalid recipient').count(),
             'rate_limited': failed_logs.filter(error_message__icontains='rate limit').count(),
         }
+
+class RecommendationManagementView(APIView):
+    permission_classes = [IsSuperuser]
+
+    @swagger_auto_schema(
+        operation_description="List all WeightConfig entries for recommendation algorithm tuning.",
+        responses={
+            200: openapi.Response(
+                description="List of weight configurations",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        properties={
+                            'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                            'category': openapi.Schema(type=openapi.TYPE_STRING, nullable=True),
+                            'skill_weight': openapi.Schema(type=openapi.TYPE_NUMBER),
+                            'target_job_weight': openapi.Schema(type=openapi.TYPE_NUMBER),
+                            'experience_weight': openapi.Schema(type=openapi.TYPE_NUMBER),
+                            'education_weight': openapi.Schema(type=openapi.TYPE_NUMBER),
+                            'location_weight': openapi.Schema(type=openapi.TYPE_NUMBER),
+                            'rating_weight': openapi.Schema(type=openapi.TYPE_NUMBER),
+                        }
+                    )
+                )
+            ),
+            401: 'Unauthorized',
+            403: 'Forbidden'
+        }
+    )
+    def get(self, request):
+        """List all WeightConfig entries."""
+        configs = WeightConfig.objects.all()
+        data = [{
+            'id': c.id,
+            'category': c.category.name if c.category else 'Default',
+            'skill_weight': c.skill_weight,
+            'target_job_weight': c.target_job_weight,
+            'experience_weight': c.experience_weight,
+            'education_weight': c.education_weight,
+            'location_weight': c.location_weight,
+            'rating_weight': c.rating_weight
+        } for c in configs]
+        return Response(data, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_description="Create or update a WeightConfig for a job category or default.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'category_id': openapi.Schema(type=openapi.TYPE_INTEGER, nullable=True, description='Job category ID (null for default)'),
+                'skill_weight': openapi.Schema(type=openapi.TYPE_NUMBER, default=0.45),
+                'target_job_weight': openapi.Schema(type=openapi.TYPE_NUMBER, default=0.2),
+                'experience_weight': openapi.Schema(type=openapi.TYPE_NUMBER, default=0.2),
+                'education_weight': openapi.Schema(type=openapi.TYPE_NUMBER, default=0.05),
+                'location_weight': openapi.Schema(type=openapi.TYPE_NUMBER, default=0.1),
+                'rating_weight': openapi.Schema(type=openapi.TYPE_NUMBER, default=0.1),
+            },
+            required=['skill_weight', 'target_job_weight', 'experience_weight', 'education_weight', 'location_weight', 'rating_weight']
+        ),
+        responses={
+            201: openapi.Response(description="WeightConfig created"),
+            200: openapi.Response(description="WeightConfig updated"),
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden',
+            404: 'Category Not Found'
+        }
+    )
+    def post(self, request):
+        """Create or update a WeightConfig."""
+        category_id = request.data.get('category_id')
+        weights = {
+            'skill_weight': float(request.data.get('skill_weight', 0.45)),
+            'target_job_weight': float(request.data.get('target_job_weight', 0.2)),
+            'experience_weight': float(request.data.get('experience_weight', 0.2)),
+            'education_weight': float(request.data.get('education_weight', 0.05)),
+            'location_weight': float(request.data.get('location_weight', 0.1)),
+            'rating_weight': float(request.data.get('rating_weight', 0.1))
+        }
+
+        try:
+            # Validate weights sum to 1.0
+            weight_sum = sum(weights.values())
+            if abs(weight_sum - 1.0) > 0.001:  # Allow small float errors
+                logger.error(f"Invalid weight sum {weight_sum} for WeightConfig")
+                return Response({"error": "Weights must sum to 1.0"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Validate category
+            category = None
+            if category_id:
+                try:
+                    category = Category.objects.get(id=category_id)
+                except Category.DoesNotExist:
+                    logger.error(f"Category {category_id} not found")
+                    return Response({"error": "Category not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            # Create or update WeightConfig
+            config, created = WeightConfig.objects.update_or_create(
+                category=category,
+                defaults=weights
+            )
+
+            # Log action
+            action = 'create_weight_config' if created else 'update_weight_config'
+            ManagementLog.objects.create(
+                admin=request.user,
+                action=action,
+                details=f"{'Created' if created else 'Updated'} WeightConfig for {category.name if category else 'Default'}: {weights}"
+            )
+            logger.info(f"{action} for category {category.name if category else 'Default'}")
+
+            return Response(
+                {"message": f"WeightConfig {'created' if created else 'updated'}"},
+                status=status.HTTP_201_CREATED if created else status.HTTP_200_OK
+            )
+        except ValueError as e:
+            logger.error(f"Invalid weight values: {str(e)}")
+            return Response({"error": "Invalid weight values"}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f"Error managing WeightConfig: {str(e)}")
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)

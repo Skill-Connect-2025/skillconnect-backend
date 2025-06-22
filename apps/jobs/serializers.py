@@ -8,6 +8,10 @@ from .feedback_serializers import FeedbackSerializer
 import uuid
 import logging
 from django.views.decorators.csrf import csrf_exempt
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from django.db.models import Avg
+from apps.users.models import User
 
 logger = logging.getLogger('django')
 
@@ -249,6 +253,7 @@ class JobSerializer(serializers.ModelSerializer):
     )
     
     payment_method = serializers.ChoiceField(choices=PAYMENT_METHOD_CHOICES)
+    client = serializers.ReadOnlyField(source='client.username')
 
     class Meta:
         model = Job
