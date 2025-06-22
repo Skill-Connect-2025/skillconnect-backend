@@ -30,6 +30,7 @@ import requests
 import re 
 from django.db import models
 from rest_framework import serializers
+from django.db.models import Avg
 
 User = get_user_model()
 
@@ -1175,27 +1176,47 @@ class DisputeCreateView(APIView):
     )
     def post(self, request, job_id):
         try:
-            job = Job.objects.get(id=job_id)
-            reported_user = User.objects.get(id=request.data.get('reported_user_id'))
-        except (Job.DoesNotExist, User.DoesNotExist):
-            return Response(
-                {"error": "Job or user not found"},
-                status=status.HTTP_404_NOT_FOUND
-            )
+            job = Job.objects.get(pk=job_id)
+        except Job.DoesNotExist:
+            return Response({"error": "Job not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        serializer = DisputeSerializer(
-            data=request.data,
-            context={
-                'request': request,
-                'job': job,
-                'reported_user': reported_user
-            }
-        )
+        # Check if the user is either the client or the assigned worker for the job
+        if request.user != job.client and (not job.assigned_worker or request.user != job.assigned_worker.user):
+            return Response({"error": "You are not authorized to create a dispute for this job."}, status=status.HTTP_403_FORBIDDEN)
 
+        serializer = DisputeSerializer(data=request.data)
         if serializer.is_valid():
-            dispute = serializer.save()
+            dispute = serializer.save(job=job, reported_by=request.user)
+
+            # Notify both parties
+            other_party = job.client if request.user != job.client else job.assigned_worker.user
+            
+            # Notification for the user who created the dispute
+            email_subject_reporter = f"Dispute Opened for Job: {job.title}"
+            email_message_reporter = (
+                f"Dear {request.user.first_name},\n\n"
+                f"You have successfully opened a dispute for the job '{job.title}'.\n"
+                f"Our team will review the case and get back to you soon.\n\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            sms_message_reporter = f"Dispute opened for '{job.title}'. We will review and contact you."
+            send_notification(request.user, email_subject_reporter, email_message_reporter, sms_message_reporter)
+
+            # Notification for the other party
+            email_subject_other = f"A Dispute Has Been Opened for Job: {job.title}"
+            email_message_other = (
+                f"Dear {other_party.first_name},\n\n"
+                f"A dispute has been opened by {request.user.first_name} regarding the job '{job.title}'.\n"
+                f"Our team will investigate the matter and may contact you for more information.\n\n"
+                f"Best regards,\nSkillConnect Team"
+            )
+            sms_message_other = f"A dispute has been opened for job '{job.title}' by {request.user.first_name}."
+            send_notification(other_party, email_subject_other, email_message_other, sms_message_other)
+
+
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 
 class DisputeListView(APIView):
     permission_classes = [IsAuthenticated]

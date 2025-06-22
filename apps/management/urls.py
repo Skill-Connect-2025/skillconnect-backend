@@ -1,6 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
+from apps.jobs.views import AdminDisputeListView, AdminDisputeResolveView
 
 router = DefaultRouter()
 router.register(r'users', views.ManagementUserViewSet)
@@ -8,7 +9,7 @@ router.register(r'notification-logs', views.NotificationLogViewSet)
 router.register(r'analytics', views.SystemAnalyticsViewSet, basename='analytics')
 router.register(r'disputes', views.DisputeManagementViewSet, basename='disputes')
 router.register(r'management-logs', views.ManagementLogViewSet)
-from jobs.views import AdminDisputeListView, AdminDisputeResolveView
+
 
 urlpatterns = [
     path('', include(router.urls)),
