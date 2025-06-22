@@ -28,4 +28,5 @@ urlpatterns = [
     path('notifications/templates/', views.NotificationTemplateView.as_view(), name='notification-templates'),
     path('notifications/metrics/', views.NotificationMetricsView.as_view(), name='notification-metrics'),
     path('notifications/broadcast/', views.BroadcastNotificationViewSet.as_view({'post': 'create'}), name='broadcast-notification'),
+    
 ]
