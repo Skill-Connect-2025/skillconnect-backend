@@ -24,6 +24,7 @@ import logging
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from django.db.models import Q
+from apps.management.models import PremiumPlan
 
 User = get_user_model()
 logger = logging.getLogger('django')
@@ -737,3 +738,46 @@ class JobsByPaymentMethodView(APIView):
         )
         serializer = JobSerializer(jobs, many=True)
         return Response(serializer.data)
+
+class LogoutView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            request.user.auth_token.delete()
+        except (AttributeError, Token.DoesNotExist):
+            pass
+        return Response({"detail": "Successfully logged out."})
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def purchase_premium(request):
+    """
+    User initiates premium purchase. Returns a mock Chapa payment link.
+    """
+    plan_id = request.data.get('plan_id')
+    try:
+        plan = PremiumPlan.objects.get(id=plan_id)
+    except PremiumPlan.DoesNotExist:
+        return Response({'detail': 'Plan not found.'}, status=404)
+    # Here, integrate with Chapa to create a payment link
+    payment_link = f"https://chapa.co/pay/mock-payment-for-plan-{plan.id}"
+    return Response({'payment_link': payment_link})
+
+@api_view(['POST'])
+def chapa_webhook(request):
+    """
+    Chapa webhook to confirm payment and grant premium.
+    """
+    user_id = request.data.get('user_id')
+    plan_id = request.data.get('plan_id')
+    # In real use, validate payment status from Chapa
+    try:
+        user = User.objects.get(id=user_id)
+        plan = PremiumPlan.objects.get(id=plan_id)
+    except (User.DoesNotExist, PremiumPlan.DoesNotExist):
+        return Response({'detail': 'User or plan not found.'}, status=404)
+    user.is_premium = True
+    user.premium_until = timezone.now() + timezone.timedelta(days=plan.duration_days)
+    user.save()
+    return Response({'detail': f'Granted {plan.name} premium to user.'})

@@ -5,7 +5,8 @@ from .views import (
     AuthSignupCompleteView, AuthPasswordResetView, AuthPasswordResetConfirmView,
     UserProfileView, UserProfileClientView, UserProfileWorkerView, 
     UserRatingStatsView, UserReviewsView, RecentReviewsView, PaymentPreferenceView,
-    WorkersByPaymentMethodView, JobsByPaymentMethodView
+    WorkersByPaymentMethodView, JobsByPaymentMethodView, LogoutView,
+    purchase_premium, chapa_webhook
 )
 
 urlpatterns = [
@@ -38,4 +39,9 @@ urlpatterns = [
     path('users/<int:user_id>/reviews/', UserReviewsView.as_view(), name='user_reviews_by_id'),
     path('users/reviews/recent/', RecentReviewsView.as_view(), name='user_recent_reviews'),
     path('users/<int:user_id>/reviews/recent/', RecentReviewsView.as_view(), name='user_recent_reviews_by_id'),
+
+    path('logout/', LogoutView.as_view(), name='logout'),
+
+    path('premium/purchase/', purchase_premium, name='purchase-premium'),
+    path('webhooks/chapa/', chapa_webhook, name='chapa-webhook'),
 ]

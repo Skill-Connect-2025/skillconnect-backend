@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from apps.management.models import ManagementLog, NotificationLog, SystemAnalytics, NotificationTemplate
+from apps.management.models import ManagementLog, NotificationLog, SystemAnalytics, NotificationTemplate, PremiumPlan
 from apps.users.models import Worker, Client
 from apps.users.serializers import UserSerializer
 from apps.jobs.models import Feedback, Job, Transaction
@@ -191,3 +191,8 @@ class NotificationTemplateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(errors)
 
         return data
+
+class PremiumPlanSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PremiumPlan
+        fields = ['id', 'name', 'price', 'duration_days']

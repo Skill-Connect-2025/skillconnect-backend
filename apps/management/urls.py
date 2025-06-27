@@ -2,35 +2,24 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
 from apps.jobs.views import AdminDisputeListView, AdminDisputeResolveView
+from .views import RecommendedWorkersForJobView, RecommendedJobsForWorkerView
 
 router = DefaultRouter()
 router.register(r'users', views.ManagementUserViewSet)
-router.register(r'notification-logs', views.NotificationLogViewSet)
 router.register(r'analytics', views.SystemAnalyticsViewSet, basename='analytics')
 router.register(r'disputes', views.DisputeManagementViewSet, basename='disputes')
-router.register(r'management-logs', views.ManagementLogViewSet)
-
+router.register(r'categories', views.CategoryViewSet, basename='categories')
+router.register(r'jobs', views.JobViewSet, basename='jobs')
+router.register(r'premium-plans', views.PremiumPlanViewSet, basename='premium-plans')
 
 urlpatterns = [
     path('', include(router.urls)),
     
-    # User Management
-    path('users/search/', views.ManagementUserSearchView.as_view(), name='user-search'),
-    path('users/bulk-action/', views.ManagementUserBulkActionView.as_view(), name='user-bulk-action'),
-    path('users/<int:user_id>/suspend/', views.ManagementUserSuspendView.as_view(), name='user-suspend'),
-    path('users/<int:user_id>/reset-password/', views.ManagementUserResetPasswordView.as_view(), name='user-reset-password'),
-    
-    # Analytics
-    path('analytics/dashboard/', views.AnalyticsDashboardView.as_view(), name='analytics-dashboard'),
-    
     # Recommendation Management
+    path('recommendations/job/<int:job_id>/workers/', RecommendedWorkersForJobView.as_view(), name='recommended-workers-for-job'),
+    path('recommendations/worker/<int:worker_id>/jobs/', RecommendedJobsForWorkerView.as_view(), name='recommended-jobs-for-worker'),
     path('recommendations/', views.RecommendationManagementView.as_view(), name='recommendation-management'),
     
-    # Notification Management
-    path('notifications/templates/', views.NotificationTemplateView.as_view(), name='notification-templates'),
-    path('notifications/metrics/', views.NotificationMetricsView.as_view(), name='notification-metrics'),
-    path('notifications/broadcast/', views.BroadcastNotificationViewSet.as_view({'post': 'create'}), name='broadcast-notification'),
-
     # Admin Dispute URLs
     path('admin/disputes/', AdminDisputeListView.as_view(), name='admin_list_disputes'),
     path('admin/disputes/<int:dispute_id>/resolve/', AdminDisputeResolveView.as_view(), name='admin_resolve_dispute'),
