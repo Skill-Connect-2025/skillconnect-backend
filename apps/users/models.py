@@ -2,12 +2,19 @@ from django.db import models
 from django.contrib.auth.models import AbstractUser
 from django.utils import timezone
 from datetime import datetime, timedelta
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.authtoken.models import Token
 
 class User(AbstractUser):
     email = models.EmailField(blank=True, null=True, unique=True)
     phone_number = models.CharField(max_length=15, blank=True, null=True, unique=True)
     is_verified = models.BooleanField(default=False)
     signup_method = models.CharField(max_length=10, choices=[('email', 'Email'), ('phone', 'Phone')], blank=True, null=True)
+    flagged = models.BooleanField(default=False)
+    flag_reason = models.TextField(blank=True, null=True)
+    suspended_until = models.DateTimeField(blank=True, null=True)
 
     @property
     def is_client(self):
@@ -80,6 +87,9 @@ class User(AbstractUser):
                     )
 
         return stats
+
+    def is_suspended(self):
+        return self.suspended_until and self.suspended_until > timezone.now()
 
 class Client(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='client')
@@ -166,3 +176,13 @@ class VerificationToken(models.Model):
 
     def __str__(self):
         return f"{self.purpose} token for {self.user.username}"
+
+class LogoutView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            request.user.auth_token.delete()
+        except (AttributeError, Token.DoesNotExist):
+            pass
+        return Response({"detail": "Successfully logged out."})

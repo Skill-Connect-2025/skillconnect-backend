@@ -23,11 +23,15 @@ from drf_yasg.utils import swagger_auto_schema
 from .serializers import NotificationLogSerializer, SystemAnalyticsSerializer, BroadcastNotificationSerializer, ManagementLogSerializer, NotificationTemplateSerializer
 from apps.recommendations.models import WeightConfig
 from apps.jobs.models import Category
+from apps.jobs.serializers import CategorySerializer
 from apps.management.models import ManagementLog
 from apps.recommendations.utils import MatchEngine
 from apps.recommendations.models import MatchResult
 from apps.recommendations.signals import invalidate_worker_matches, invalidate_job_matches
 from apps.recommendations.serializers import MatchResultSerializer
+from apps.jobs.models import Job
+from apps.jobs.serializers import JobSerializer
+from apps.users.serializers import UserSerializer
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -82,67 +86,11 @@ class ManagementUserDetailView(APIView):
         except User.DoesNotExist:
             return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
 
-class ManagementUserSuspendView(APIView):
-    permission_classes = [IsAuthenticated, IsSuperuser]
-
-    def post(self, request, user_id):
-        """Suspend or reactivate a user."""
-        try:
-            user = User.objects.get(id=user_id)
-            is_active = request.data.get('is_active', False)
-            reason = request.data.get('reason', '')
-            if user.is_active == is_active:
-                return Response({"error": f"User is already {'active' if is_active else 'suspended'}"}, status=status.HTTP_400_BAD_REQUEST)
-            user.is_active = is_active
-            user.save()
-            action = 'suspended' if not is_active else 'reactivated'
-            email_subject = f"Account {action.capitalize()}"
-            email_message = (
-                f"Dear {user.first_name},\n\n"
-                f"Your account has been {action}.\n"
-                f"Reason: {reason or 'No reason provided'}\n\n"
-                f"Best regards,\nSkillConnect Team"
-            )
-            sms_message = f"Your account has been {action}. Reason: {reason or 'None'}"
-            send_notification(user, email_subject, email_message, sms_message)
-            ManagementLog.objects.create(
-                admin=request.user,
-                action=f'{action}_user',
-                details=f"{action.capitalize()} user {user.username} (ID: {user_id}). Reason: {reason}"
-            )
-            return Response({"message": f"User {action}"})
-        except User.DoesNotExist:
-            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
-
-class ManagementUserResetPasswordView(APIView):
-    permission_classes = [IsAuthenticated, IsSuperuser]
-
-    def post(self, request, user_id):
-        """Generate and send a password reset code."""
-        try:
-            user = User.objects.get(id=user_id)
-            reset_code = str(random.randint(100000, 999999))
-            user.reset_code = reset_code
-            user.save()
-            email_subject = "Password Reset Request"
-            email_message = (
-                f"Dear {user.first_name},\n\n"
-                f"Your password reset code is: {reset_code}\n"
-                f"Please use this code to reset your password.\n\n"
-                f"Best regards,\nSkillConnect Team"
-            )
-            sms_message = f"Your password reset code is: {reset_code}"
-            send_notification(user, email_subject, email_message, sms_message)
-            ManagementLog.objects.create(
-                admin=request.user,
-                action='reset_password',
-                details=f'Reset password for user {user.username} (ID: {user_id})'
-            )
-            return Response({"message": "Password reset code sent"})
-        except User.DoesNotExist:
-            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
-
 class ManagementUserViewSet(viewsets.ModelViewSet):
+    """
+    Admin API for managing users (CRUD, suspend, reset password).
+    Only accessible to admin/superuser accounts.
+    """
     queryset = User.objects.all()
     serializer_class = ManagementUserSerializer
     permission_classes = [IsAuthenticated, IsAdminUser]
@@ -169,28 +117,48 @@ class ManagementUserViewSet(viewsets.ModelViewSet):
             details=f"Deleted user {username}"
         )
 
-class NotificationLogViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = NotificationLog.objects.all()
-    serializer_class = NotificationLogSerializer
-    permission_classes = [IsAuthenticated, IsAdminUser]
+    @action(detail=True, methods=['post'])
+    def suspend(self, request, pk=None):
+        user = self.get_object()
+        user.is_active = False
+        user.save()
+        ManagementLog.objects.create(
+            admin=request.user,
+            action='suspend_user',
+            details=f'Suspended user {user.username}'
+        )
+        return Response({'status': 'user suspended'})
 
-    def get_queryset(self):
-        queryset = super().get_queryset()
-        if not self.request.user.is_superuser:
-            return queryset.filter(recipient=self.request.user)
-        return queryset
+    @action(detail=True, methods=['post'])
+    def reset_password(self, request, pk=None):
+        user = self.get_object()
+        new_password = request.data.get('new_password')
+        if not new_password:
+            return Response({'error': 'new_password required'}, status=400)
+        user.set_password(new_password)
+        user.save()
+        ManagementLog.objects.create(
+            admin=request.user,
+            action='reset_password',
+            details=f'Reset password for user {user.username}'
+        )
+        return Response({'status': 'password reset'})
 
 class SystemAnalyticsViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Admin API for viewing daily platform analytics (auto-generates today's analytics if missing).
+    Only accessible to admin/superuser accounts.
+    """
     queryset = SystemAnalytics.objects.all()
     serializer_class = SystemAnalyticsSerializer
     permission_classes = [IsAuthenticated, IsAdminUser]
 
-    @action(detail=False, methods=['post'])
-    def generate_daily(self, request):
-        """Generate daily analytics."""
-        try:
-            today = timezone.now().date()
-            analytics = SystemAnalytics.objects.create(
+    def list(self, request, *args, **kwargs):
+        from django.utils import timezone
+        today = timezone.now().date()
+        if not SystemAnalytics.objects.filter(date=today).exists():
+            # Generate today's analytics
+            SystemAnalytics.objects.create(
                 date=today,
                 total_users=User.objects.count(),
                 total_clients=Client.objects.count(),
@@ -198,23 +166,10 @@ class SystemAnalyticsViewSet(viewsets.ReadOnlyModelViewSet):
                 total_jobs=Job.objects.count(),
                 completed_jobs=Job.objects.filter(status='completed').count(),
                 total_transactions=Transaction.objects.count(),
-                total_transaction_amount=Transaction.objects.aggregate(
-                    total=Sum('amount')
-                )['total'] or 0,
-                average_rating=Feedback.objects.aggregate(
-                    avg=Avg('rating')
-                )['avg'] or 0
+                total_transaction_amount=Transaction.objects.aggregate(total=Sum('amount'))['total'] or 0,
+                average_rating=Feedback.objects.aggregate(avg=Avg('rating'))['avg'] or 0
             )
-            return Response(
-                SystemAnalyticsSerializer(analytics).data,
-                status=status.HTTP_201_CREATED
-            )
-        except Exception as e:
-            logger.error(f"Error generating daily analytics: {str(e)}")
-            return Response(
-                {'error': 'Failed to generate analytics'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+        return super().list(request, *args, **kwargs)
 
     @action(detail=False, methods=['get'])
     def summary(self, request):
@@ -255,75 +210,20 @@ class SystemAnalyticsViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-class BroadcastNotificationViewSet(viewsets.ViewSet):
-    permission_classes = [IsAuthenticated, IsSuperuser]
-
-    def create(self, request):
-        serializer = BroadcastNotificationSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        data = serializer.validated_data
-        recipients = self._get_recipients(data['recipients'])
-        
-        success_count = 0
-        error_count = 0
-        
-        for user in recipients:
-            try:
-                notification = NotificationLog.objects.create(
-                    recipient=user,
-                    subject=data.get('subject', ''),
-                    message=data['message'],
-                    channel=data['channel']
-                )
-                
-                send_notification(
-                    user=user,
-                    subject=data.get('subject', ''),
-                    message=data['message'],
-                    channel=data['channel']
-                )
-                
-                notification.status = 'sent'
-                notification.sent_at = timezone.now()
-                notification.save()
-                success_count += 1
-                
-            except Exception as e:
-                logger.error(f"Error sending notification to {user.username}: {str(e)}")
-                if notification:
-                    notification.status = 'failed'
-                    notification.error_message = str(e)
-                    notification.save()
-                error_count += 1
-
-        ManagementLog.objects.create(
-            admin=request.user,
-            action='broadcast_notification',
-            details=f"Sent broadcast to {success_count} users ({error_count} failed)"
-        )
-
-        return Response({
-            'success_count': success_count,
-            'error_count': error_count
-        })
-
-    def _get_recipients(self, recipient_type):
-        if recipient_type == 'all':
-            return User.objects.filter(is_active=True)
-        elif recipient_type == 'clients':
-            return User.objects.filter(client__isnull=False, is_active=True)
-        elif recipient_type == 'workers':
-            return User.objects.filter(worker__isnull=False, is_active=True)
-        return User.objects.none()
-
 class ManagementLogViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Admin API for viewing management action logs (audit trail).
+    Only accessible to admin/superuser accounts.
+    """
     queryset = ManagementLog.objects.all()
     serializer_class = ManagementLogSerializer
     permission_classes = [IsAuthenticated, IsAdminUser]
 
 class DisputeManagementViewSet(viewsets.ModelViewSet):
+    """
+    Admin API for managing disputes (CRUD, resolve, statistics).
+    Only accessible to admin/superuser accounts.
+    """
     queryset = Dispute.objects.all()
     serializer_class = DisputeSerializer
     permission_classes = [IsAuthenticated, IsAdminUser]
@@ -342,25 +242,39 @@ class DisputeManagementViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def resolve(self, request, pk=None):
-        """Resolve a dispute with a resolution message."""
         dispute = self.get_object()
         resolution = request.data.get('resolution')
-        
+        suspend_user = request.data.get('suspend_user', False)
+        suspend_days = request.data.get('suspend_days', 0)
+        flag_user = request.data.get('flag_user', False)
+        flag_reason = request.data.get('flag_reason', '')
+        user_to_act = dispute.reported_user
         if not resolution:
-            return Response(
-                {'error': 'Resolution message is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-            
+            return Response({'error': 'Resolution message is required'}, status=status.HTTP_400_BAD_REQUEST)
         if dispute.status in ['resolved', 'closed']:
-            return Response(
-                {'error': 'Dispute is already resolved or closed'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-            
+            return Response({'error': 'Dispute is already resolved or closed'}, status=status.HTTP_400_BAD_REQUEST)
         try:
             dispute.mark_as_resolved(request.user, resolution)
-            
+            # Suspend user if requested
+            if suspend_user and suspend_days > 0:
+                user_to_act.is_active = False
+                user_to_act.suspended_until = timezone.now() + timedelta(days=int(suspend_days))
+                user_to_act.save()
+                ManagementLog.objects.create(
+                    admin=request.user,
+                    action='suspend_user_dispute',
+                    details=f'Suspended user {user_to_act.username} for {suspend_days} days due to dispute {dispute.id}'
+                )
+            # Flag user if requested
+            if flag_user:
+                user_to_act.flagged = True
+                user_to_act.flag_reason = flag_reason or f'Flagged by admin during dispute {dispute.id}'
+                user_to_act.save()
+                ManagementLog.objects.create(
+                    admin=request.user,
+                    action='flag_user_dispute',
+                    details=f'Flagged user {user_to_act.username} for dispute {dispute.id}: {user_to_act.flag_reason}'
+                )
             # Notify both parties about the resolution
             email_subject = "Dispute Resolution Update"
             email_message = (
@@ -375,7 +289,6 @@ class DisputeManagementViewSet(viewsets.ModelViewSet):
                 email_message,
                 f"Your dispute has been resolved. Resolution: {resolution}"
             )
-            
             email_message = (
                 f"Dear {dispute.reported_user.first_name},\n\n"
                 f"The dispute regarding job '{dispute.job.title}' has been resolved.\n"
@@ -388,22 +301,16 @@ class DisputeManagementViewSet(viewsets.ModelViewSet):
                 email_message,
                 f"The dispute has been resolved. Resolution: {resolution}"
             )
-            
             # Log the action
             ManagementLog.objects.create(
                 admin=request.user,
                 action='resolve_dispute',
                 details=f'Resolved dispute {dispute.id} for job {dispute.job.id}'
             )
-            
             return Response(self.get_serializer(dispute).data)
-            
         except Exception as e:
             logger.error(f"Error resolving dispute: {str(e)}")
-            return Response(
-                {'error': 'Failed to resolve dispute'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            return Response({'error': 'Failed to resolve dispute'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=True, methods=['post'])
     def close(self, request, pk=None):
@@ -470,289 +377,14 @@ class DisputeManagementViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-class ManagementUserSearchView(APIView):
-    permission_classes = [IsAuthenticated, IsSuperuser]
-
-    @swagger_auto_schema(
-        operation_description="Search users with filters",
-        manual_parameters=[
-            openapi.Parameter('query', openapi.IN_QUERY, description="Search query", type=openapi.TYPE_STRING),
-            openapi.Parameter('role', openapi.IN_QUERY, description="User role (client/worker)", type=openapi.TYPE_STRING),
-            openapi.Parameter('status', openapi.IN_QUERY, description="User status (active/suspended)", type=openapi.TYPE_STRING),
-            openapi.Parameter('date_from', openapi.IN_QUERY, description="Start date", type=openapi.TYPE_STRING),
-            openapi.Parameter('date_to', openapi.IN_QUERY, description="End date", type=openapi.TYPE_STRING),
-        ],
-        responses={
-            200: ManagementUserSerializer(many=True),
-            401: 'Unauthorized',
-            403: 'Forbidden'
-        }
-    )
-    def get(self, request):
-        query = request.query_params.get('query', '')
-        role = request.query_params.get('role')
-        status = request.query_params.get('status')
-        date_from = request.query_params.get('date_from')
-        date_to = request.query_params.get('date_to')
-
-        users = User.objects.all()
-
-        if query:
-            users = users.filter(
-                Q(username__icontains=query) |
-                Q(email__icontains=query) |
-                Q(phone_number__icontains=query) |
-                Q(first_name__icontains=query) |
-                Q(last_name__icontains=query)
-            )
-
-        if role:
-            if role == 'client':
-                users = users.filter(client__isnull=False)
-            elif role == 'worker':
-                users = users.filter(worker__isnull=False)
-
-        if status:
-            users = users.filter(is_active=(status == 'active'))
-
-        if date_from:
-            users = users.filter(date_joined__gte=date_from)
-        if date_to:
-            users = users.filter(date_joined__lte=date_to)
-
-        serializer = ManagementUserSerializer(users, many=True)
-        return Response(serializer.data)
-
-class ManagementUserBulkActionView(APIView):
-    permission_classes = [IsAuthenticated, IsSuperuser]
-
-    @swagger_auto_schema(
-        operation_description="Perform bulk actions on users",
-        request_body=openapi.Schema(
-            type=openapi.TYPE_OBJECT,
-            required=['user_ids', 'action'],
-            properties={
-                'user_ids': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_INTEGER)),
-                'action': openapi.Schema(type=openapi.TYPE_STRING, enum=['suspend', 'activate', 'delete'])
-            }
-        ),
-        responses={
-            200: openapi.Response(description="Action completed successfully"),
-            400: 'Bad Request',
-            401: 'Unauthorized',
-            403: 'Forbidden'
-        }
-    )
-    def post(self, request):
-        user_ids = request.data.get('user_ids', [])
-        action = request.data.get('action')
-
-        if not user_ids or not action:
-            return Response(
-                {"error": "user_ids and action are required"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        users = User.objects.filter(id__in=user_ids)
-        
-        if action == 'suspend':
-            users.update(is_active=False)
-            action_type = 'bulk_suspend'
-        elif action == 'activate':
-            users.update(is_active=True)
-            action_type = 'bulk_activate'
-        elif action == 'delete':
-            users.delete()
-            action_type = 'bulk_delete'
-        else:
-            return Response(
-                {"error": "Invalid action"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Log the bulk action
-        ManagementLog.objects.create(
-            admin=request.user,
-            action=action_type,
-            details=f"Performed {action} on {len(user_ids)} users"
-        )
-
-        return Response({"message": f"Successfully performed {action} on {len(user_ids)} users"})
-
-class AnalyticsDashboardView(APIView):
-    permission_classes = [IsAuthenticated, IsSuperuser]
-
-    @swagger_auto_schema(
-        operation_description="Get detailed analytics dashboard with trend analysis",
-        manual_parameters=[
-            openapi.Parameter('period', openapi.IN_QUERY, description="Time period (daily/weekly/monthly)", type=openapi.TYPE_STRING),
-            openapi.Parameter('start_date', openapi.IN_QUERY, description="Start date", type=openapi.TYPE_STRING),
-            openapi.Parameter('end_date', openapi.IN_QUERY, description="End date", type=openapi.TYPE_STRING),
-        ],
-        responses={
-            200: openapi.Response(
-                description="Analytics dashboard data",
-                schema=openapi.Schema(
-                    type=openapi.TYPE_OBJECT,
-                    properties={
-                        'user_metrics': openapi.Schema(
-                            type=openapi.TYPE_OBJECT,
-                            properties={
-                                'total_users': openapi.Schema(type=openapi.TYPE_INTEGER),
-                                'active_users': openapi.Schema(type=openapi.TYPE_INTEGER),
-                                'new_users': openapi.Schema(type=openapi.TYPE_INTEGER),
-                                'user_growth_rate': openapi.Schema(type=openapi.TYPE_NUMBER),
-                                'user_retention_rate': openapi.Schema(type=openapi.TYPE_NUMBER),
-                            }
-                        ),
-                        'job_metrics': openapi.Schema(
-                            type=openapi.TYPE_OBJECT,
-                            properties={
-                                'total_jobs': openapi.Schema(type=openapi.TYPE_INTEGER),
-                                'completed_jobs': openapi.Schema(type=openapi.TYPE_INTEGER),
-                                'active_jobs': openapi.Schema(type=openapi.TYPE_INTEGER),
-                                'completion_rate': openapi.Schema(type=openapi.TYPE_NUMBER),
-                                'average_job_duration': openapi.Schema(type=openapi.TYPE_NUMBER),
-                            }
-                        ),
-                        'financial_metrics': openapi.Schema(
-                            type=openapi.TYPE_OBJECT,
-                            properties={
-                                'total_transactions': openapi.Schema(type=openapi.TYPE_INTEGER),
-                                'total_volume': openapi.Schema(type=openapi.TYPE_NUMBER),
-                                'average_transaction': openapi.Schema(type=openapi.TYPE_NUMBER),
-                                'payment_method_distribution': openapi.Schema(type=openapi.TYPE_OBJECT),
-                            }
-                        ),
-                        'quality_metrics': openapi.Schema(
-                            type=openapi.TYPE_OBJECT,
-                            properties={
-                                'average_rating': openapi.Schema(type=openapi.TYPE_NUMBER),
-                                'rating_distribution': openapi.Schema(type=openapi.TYPE_OBJECT),
-                                'dispute_rate': openapi.Schema(type=openapi.TYPE_NUMBER),
-                                'resolution_rate': openapi.Schema(type=openapi.TYPE_NUMBER),
-                            }
-                        ),
-                        'trends': openapi.Schema(
-                            type=openapi.TYPE_OBJECT,
-                            properties={
-                                'user_growth': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_OBJECT)),
-                                'job_activity': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_OBJECT)),
-                                'revenue': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_OBJECT)),
-                            }
-                        ),
-                    }
-                )
-            ),
-            401: 'Unauthorized',
-            403: 'Forbidden'
-        }
-    )
-    def get(self, request):
-        period = request.query_params.get('period', 'daily')
-        start_date = request.query_params.get('start_date')
-        end_date = request.query_params.get('end_date')
-
-        # Calculate user metrics
-        user_metrics = {
-            'total_users': User.objects.count(),
-            'active_users': User.objects.filter(is_active=True).count(),
-            'new_users': User.objects.filter(date_joined__gte=start_date).count() if start_date else 0,
-            'user_growth_rate': self._calculate_growth_rate(User, 'date_joined', period),
-            'user_retention_rate': self._calculate_retention_rate(period),
-        }
-
-        # Calculate job metrics
-        job_metrics = {
-            'total_jobs': Job.objects.count(),
-            'completed_jobs': Job.objects.filter(status='completed').count(),
-            'active_jobs': Job.objects.filter(status='in_progress').count(),
-            'completion_rate': self._calculate_completion_rate(),
-            'average_job_duration': self._calculate_average_job_duration(),
-        }
-
-        # Calculate financial metrics
-        financial_metrics = {
-            'total_transactions': Transaction.objects.count(),
-            'total_volume': Transaction.objects.aggregate(total=Sum('amount'))['total'] or 0,
-            'average_transaction': self._calculate_average_transaction(),
-            'payment_method_distribution': self._get_payment_method_distribution(),
-        }
-
-        # Calculate quality metrics
-        quality_metrics = {
-            'average_rating': self._calculate_average_rating(),
-            'rating_distribution': self._get_rating_distribution(),
-            'dispute_rate': self._calculate_dispute_rate(),
-            'resolution_rate': self._calculate_resolution_rate(),
-        }
-
-        # Calculate trends
-        trends = {
-            'user_growth': self._get_user_growth_trend(period),
-            'job_activity': self._get_job_activity_trend(period),
-            'revenue': self._get_revenue_trend(period),
-        }
-
-        return Response({
-            'user_metrics': user_metrics,
-            'job_metrics': job_metrics,
-            'financial_metrics': financial_metrics,
-            'quality_metrics': quality_metrics,
-            'trends': trends,
-        })
-
-    def _calculate_growth_rate(self, model, date_field, period):
-        # Implementation for calculating growth rate
-        pass
-
-    def _calculate_retention_rate(self, period):
-        # Implementation for calculating retention rate
-        pass
-
-    def _calculate_completion_rate(self):
-        # Implementation for calculating job completion rate
-        pass
-
-    def _calculate_average_job_duration(self):
-        # Implementation for calculating average job duration
-        pass
-
-    def _calculate_average_transaction(self):
-        # Implementation for calculating average transaction amount
-        pass
-
-    def _get_payment_method_distribution(self):
-        # Implementation for getting payment method distribution
-        pass
-
-    def _calculate_average_rating(self):
-        # Implementation for calculating average rating
-        pass
-
-    def _get_rating_distribution(self):
-        # Implementation for getting rating distribution
-        pass
-
-    def _calculate_dispute_rate(self):
-        # Implementation for calculating dispute rate
-        pass
-
-    def _calculate_resolution_rate(self):
-        # Implementation for calculating resolution rate
-        pass
-
-    def _get_user_growth_trend(self, period):
-        # Implementation for getting user growth trend
-        pass
-
-    def _get_job_activity_trend(self, period):
-        # Implementation for getting job activity trend
-        pass
-
-    def _get_revenue_trend(self, period):
-        # Implementation for getting revenue trend
-        pass
+class CategoryViewSet(viewsets.ModelViewSet):
+    """
+    Admin API for managing job/service categories (CRUD).
+    Only accessible to admin/superuser accounts.
+    """
+    queryset = Category.objects.all()
+    serializer_class = CategorySerializer
+    permission_classes = [IsAuthenticated, IsAdminUser]
 
 class RecommendationManagementView(APIView):
     permission_classes = [IsAuthenticated, IsSuperuser]
@@ -893,294 +525,43 @@ class RecommendationManagementView(APIView):
         # Implementation for calculating embedding quality
         pass
 
-class NotificationTemplateView(APIView):
-    permission_classes = [IsAuthenticated, IsSuperuser]
+class JobViewSet(viewsets.ModelViewSet):
+    """
+    Admin API for managing jobs (CRUD).
+    Only accessible to admin/superuser accounts.
+    """
+    queryset = Job.objects.all()
+    serializer_class = JobSerializer
+    permission_classes = [IsAuthenticated, IsAdminUser]
 
-    @swagger_auto_schema(
-        operation_description="Get all notification templates",
-        responses={
-            200: openapi.Response(
-                description="List of notification templates",
-                schema=openapi.Schema(
-                    type=openapi.TYPE_ARRAY,
-                    items=openapi.Schema(
-                        type=openapi.TYPE_OBJECT,
-                        properties={
-                            'id': openapi.Schema(type=openapi.TYPE_INTEGER),
-                            'name': openapi.Schema(type=openapi.TYPE_STRING),
-                            'subject': openapi.Schema(type=openapi.TYPE_STRING),
-                            'body': openapi.Schema(type=openapi.TYPE_STRING),
-                            'type': openapi.Schema(type=openapi.TYPE_STRING),
-                            'variables': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_STRING)),
-                        }
-                    )
-                )
-            ),
-            401: 'Unauthorized',
-            403: 'Forbidden'
-        }
-    )
-    def get(self, request):
-        templates = NotificationTemplate.objects.all()
-        serializer = NotificationTemplateSerializer(templates, many=True)
+class RecommendedWorkersForJobView(APIView):
+    """
+    Admin API to get recommended workers for a specific job (for a client).
+    Only accessible to admin/superuser accounts.
+    """
+    permission_classes = [IsAuthenticated, IsAdminUser]
+    def get(self, request, job_id):
+        try:
+            job = Job.objects.get(id=job_id)
+        except Job.DoesNotExist:
+            return Response({'error': 'Job not found'}, status=404)
+        # Use your recommendation engine to get recommended workers
+        recommended_workers = MatchEngine.recommend_workers_for_job(job)
+        serializer = UserSerializer([w.user for w in recommended_workers], many=True)
         return Response(serializer.data)
 
-    @swagger_auto_schema(
-        operation_description="Create a new notification template",
-        request_body=NotificationTemplateSerializer,
-        responses={
-            201: NotificationTemplateSerializer,
-            400: 'Bad Request',
-            401: 'Unauthorized',
-            403: 'Forbidden'
-        }
-    )
-    def post(self, request):
-        serializer = NotificationTemplateSerializer(data=request.data)
-        if serializer.is_valid():
-            template = serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-class NotificationMetricsView(APIView):
-    permission_classes = [IsAuthenticated, IsSuperuser]
-
-    @swagger_auto_schema(
-        operation_description="Get notification delivery metrics and statistics",
-        manual_parameters=[
-            openapi.Parameter('start_date', openapi.IN_QUERY, description="Start date", type=openapi.TYPE_STRING),
-            openapi.Parameter('end_date', openapi.IN_QUERY, description="End date", type=openapi.TYPE_STRING),
-            openapi.Parameter('channel', openapi.IN_QUERY, description="Notification channel", type=openapi.TYPE_STRING),
-        ],
-        responses={
-            200: openapi.Response(
-                description="Notification metrics and statistics",
-                schema=openapi.Schema(
-                    type=openapi.TYPE_OBJECT,
-                    properties={
-                        'total_sent': openapi.Schema(type=openapi.TYPE_INTEGER),
-                        'success_rate': openapi.Schema(type=openapi.TYPE_NUMBER),
-                        'delivery_time': openapi.Schema(
-                            type=openapi.TYPE_OBJECT,
-                            properties={
-                                'average': openapi.Schema(type=openapi.TYPE_NUMBER),
-                                'p95': openapi.Schema(type=openapi.TYPE_NUMBER),
-                                'p99': openapi.Schema(type=openapi.TYPE_NUMBER),
-                            }
-                        ),
-                        'channel_stats': openapi.Schema(
-                            type=openapi.TYPE_OBJECT,
-                            properties={
-                                'email': openapi.Schema(type=openapi.TYPE_OBJECT),
-                                'sms': openapi.Schema(type=openapi.TYPE_OBJECT),
-                            }
-                        ),
-                        'error_breakdown': openapi.Schema(
-                            type=openapi.TYPE_OBJECT,
-                            properties={
-                                'delivery_failed': openapi.Schema(type=openapi.TYPE_INTEGER),
-                                'invalid_recipient': openapi.Schema(type=openapi.TYPE_INTEGER),
-                                'rate_limited': openapi.Schema(type=openapi.TYPE_INTEGER),
-                            }
-                        ),
-                    }
-                )
-            ),
-            401: 'Unauthorized',
-            403: 'Forbidden'
-        }
-    )
-    def get(self, request):
-        start_date = request.query_params.get('start_date')
-        end_date = request.query_params.get('end_date')
-        channel = request.query_params.get('channel')
-
-        logs = NotificationLog.objects.all()
-
-        if start_date:
-            logs = logs.filter(created_at__gte=start_date)
-        if end_date:
-            logs = logs.filter(created_at__lte=end_date)
-        if channel:
-            logs = logs.filter(channel=channel)
-
-        total_sent = logs.count()
-        successful = logs.filter(status='sent').count()
-        success_rate = (successful / total_sent * 100) if total_sent > 0 else 0
-
-        # Calculate delivery time statistics
-        delivery_times = logs.filter(status='sent').values_list('sent_at', 'created_at')
-        delivery_time_stats = self._calculate_delivery_time_stats(delivery_times)
-
-        # Get channel-specific statistics
-        channel_stats = self._get_channel_stats(logs)
-
-        # Get error breakdown
-        error_breakdown = self._get_error_breakdown(logs)
-
-        return Response({
-            'total_sent': total_sent,
-            'success_rate': success_rate,
-            'delivery_time': delivery_time_stats,
-            'channel_stats': channel_stats,
-            'error_breakdown': error_breakdown,
-        })
-
-    def _calculate_delivery_time_stats(self, delivery_times):
-        if not delivery_times:
-            return {'average': 0, 'p95': 0, 'p99': 0}
-
-        times = [(sent - created).total_seconds() for sent, created in delivery_times]
-        times.sort()
-
-        return {
-            'average': sum(times) / len(times),
-            'p95': times[int(len(times) * 0.95)],
-            'p99': times[int(len(times) * 0.99)],
-        }
-
-    def _get_channel_stats(self, logs):
-        email_logs = logs.filter(channel='email')
-        sms_logs = logs.filter(channel='sms')
-
-        return {
-            'email': {
-                'total': email_logs.count(),
-                'success_rate': (email_logs.filter(status='sent').count() / email_logs.count() * 100) if email_logs.count() > 0 else 0,
-            },
-            'sms': {
-                'total': sms_logs.count(),
-                'success_rate': (sms_logs.filter(status='sent').count() / sms_logs.count() * 100) if sms_logs.count() > 0 else 0,
-            },
-        }
-
-    def _get_error_breakdown(self, logs):
-        failed_logs = logs.filter(status='failed')
-        
-        return {
-            'delivery_failed': failed_logs.filter(error_message__icontains='delivery failed').count(),
-            'invalid_recipient': failed_logs.filter(error_message__icontains='invalid recipient').count(),
-            'rate_limited': failed_logs.filter(error_message__icontains='rate limit').count(),
-        }
-
-class RecommendationManagementView(APIView):
-    permission_classes = [IsSuperuser]
-
-    @swagger_auto_schema(
-        operation_description="List all WeightConfig entries for recommendation algorithm tuning.",
-        responses={
-            200: openapi.Response(
-                description="List of weight configurations",
-                schema=openapi.Schema(
-                    type=openapi.TYPE_ARRAY,
-                    items=openapi.Schema(
-                        type=openapi.TYPE_OBJECT,
-                        properties={
-                            'id': openapi.Schema(type=openapi.TYPE_INTEGER),
-                            'category': openapi.Schema(type=openapi.TYPE_STRING, nullable=True),
-                            'skill_weight': openapi.Schema(type=openapi.TYPE_NUMBER),
-                            'target_job_weight': openapi.Schema(type=openapi.TYPE_NUMBER),
-                            'experience_weight': openapi.Schema(type=openapi.TYPE_NUMBER),
-                            'education_weight': openapi.Schema(type=openapi.TYPE_NUMBER),
-                            'location_weight': openapi.Schema(type=openapi.TYPE_NUMBER),
-                            'rating_weight': openapi.Schema(type=openapi.TYPE_NUMBER),
-                        }
-                    )
-                )
-            ),
-            401: 'Unauthorized',
-            403: 'Forbidden'
-        }
-    )
-    def get(self, request):
-        """List all WeightConfig entries."""
-        configs = WeightConfig.objects.all()
-        data = [{
-            'id': c.id,
-            'category': c.category.name if c.category else 'Default',
-            'skill_weight': c.skill_weight,
-            'target_job_weight': c.target_job_weight,
-            'experience_weight': c.experience_weight,
-            'education_weight': c.education_weight,
-            'location_weight': c.location_weight,
-            'rating_weight': c.rating_weight
-        } for c in configs]
-        return Response(data, status=status.HTTP_200_OK)
-
-    @swagger_auto_schema(
-        operation_description="Create or update a WeightConfig for a job category or default.",
-        request_body=openapi.Schema(
-            type=openapi.TYPE_OBJECT,
-            properties={
-                'category_id': openapi.Schema(type=openapi.TYPE_INTEGER, nullable=True, description='Job category ID (null for default)'),
-                'skill_weight': openapi.Schema(type=openapi.TYPE_NUMBER, default=0.45),
-                'target_job_weight': openapi.Schema(type=openapi.TYPE_NUMBER, default=0.2),
-                'experience_weight': openapi.Schema(type=openapi.TYPE_NUMBER, default=0.2),
-                'education_weight': openapi.Schema(type=openapi.TYPE_NUMBER, default=0.05),
-                'location_weight': openapi.Schema(type=openapi.TYPE_NUMBER, default=0.1),
-                'rating_weight': openapi.Schema(type=openapi.TYPE_NUMBER, default=0.1),
-            },
-            required=['skill_weight', 'target_job_weight', 'experience_weight', 'education_weight', 'location_weight', 'rating_weight']
-        ),
-        responses={
-            201: openapi.Response(description="WeightConfig created"),
-            200: openapi.Response(description="WeightConfig updated"),
-            400: 'Bad Request',
-            401: 'Unauthorized',
-            403: 'Forbidden',
-            404: 'Category Not Found'
-        }
-    )
-    def post(self, request):
-        """Create or update a WeightConfig."""
-        category_id = request.data.get('category_id')
-        weights = {
-            'skill_weight': float(request.data.get('skill_weight', 0.45)),
-            'target_job_weight': float(request.data.get('target_job_weight', 0.2)),
-            'experience_weight': float(request.data.get('experience_weight', 0.2)),
-            'education_weight': float(request.data.get('education_weight', 0.05)),
-            'location_weight': float(request.data.get('location_weight', 0.1)),
-            'rating_weight': float(request.data.get('rating_weight', 0.1))
-        }
-
+class RecommendedJobsForWorkerView(APIView):
+    """
+    Admin API to get recommended jobs for a specific worker.
+    Only accessible to admin/superuser accounts.
+    """
+    permission_classes = [IsAuthenticated, IsAdminUser]
+    def get(self, request, worker_id):
         try:
-            # Validate weights sum to 1.0
-            weight_sum = sum(weights.values())
-            if abs(weight_sum - 1.0) > 0.001:  # Allow small float errors
-                logger.error(f"Invalid weight sum {weight_sum} for WeightConfig")
-                return Response({"error": "Weights must sum to 1.0"}, status=status.HTTP_400_BAD_REQUEST)
-
-            # Validate category
-            category = None
-            if category_id:
-                try:
-                    category = Category.objects.get(id=category_id)
-                except Category.DoesNotExist:
-                    logger.error(f"Category {category_id} not found")
-                    return Response({"error": "Category not found"}, status=status.HTTP_404_NOT_FOUND)
-
-            # Create or update WeightConfig
-            config, created = WeightConfig.objects.update_or_create(
-                category=category,
-                defaults=weights
-            )
-
-            # Log action
-            action = 'create_weight_config' if created else 'update_weight_config'
-            ManagementLog.objects.create(
-                admin=request.user,
-                action=action,
-                details=f"{'Created' if created else 'Updated'} WeightConfig for {category.name if category else 'Default'}: {weights}"
-            )
-            logger.info(f"{action} for category {category.name if category else 'Default'}")
-
-            return Response(
-                {"message": f"WeightConfig {'created' if created else 'updated'}"},
-                status=status.HTTP_201_CREATED if created else status.HTTP_200_OK
-            )
-        except ValueError as e:
-            logger.error(f"Invalid weight values: {str(e)}")
-            return Response({"error": "Invalid weight values"}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            logger.error(f"Error managing WeightConfig: {str(e)}")
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            worker = Worker.objects.get(id=worker_id)
+        except Worker.DoesNotExist:
+            return Response({'error': 'Worker not found'}, status=404)
+        # Use your recommendation engine to get recommended jobs
+        recommended_jobs = MatchEngine.recommend_jobs_for_worker(worker)
+        serializer = JobSerializer(recommended_jobs, many=True)
+        return Response(serializer.data)

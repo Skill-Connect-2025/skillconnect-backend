@@ -5,7 +5,7 @@ from .views import (
     AuthSignupCompleteView, AuthPasswordResetView, AuthPasswordResetConfirmView,
     UserProfileView, UserProfileClientView, UserProfileWorkerView, 
     UserRatingStatsView, UserReviewsView, RecentReviewsView, PaymentPreferenceView,
-    WorkersByPaymentMethodView, JobsByPaymentMethodView
+    WorkersByPaymentMethodView, JobsByPaymentMethodView, LogoutView
 )
 
 urlpatterns = [
@@ -38,4 +38,6 @@ urlpatterns = [
     path('users/<int:user_id>/reviews/', UserReviewsView.as_view(), name='user_reviews_by_id'),
     path('users/reviews/recent/', RecentReviewsView.as_view(), name='user_recent_reviews'),
     path('users/<int:user_id>/reviews/recent/', RecentReviewsView.as_view(), name='user_recent_reviews_by_id'),
+
+    path('logout/', LogoutView.as_view(), name='logout'),
 ]

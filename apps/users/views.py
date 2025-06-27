@@ -737,3 +737,13 @@ class JobsByPaymentMethodView(APIView):
         )
         serializer = JobSerializer(jobs, many=True)
         return Response(serializer.data)
+
+class LogoutView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            request.user.auth_token.delete()
+        except (AttributeError, Token.DoesNotExist):
+            pass
+        return Response({"detail": "Successfully logged out."})
