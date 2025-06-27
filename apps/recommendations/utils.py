@@ -236,7 +236,7 @@ class MatchEngine:
                 })
             except Exception as e:
                 logger.error(f"Error matching job {job.id} to worker {worker.id}: {str(e)}")
-        return sorted(results, key=lambda x: x['score'], reverse=True)[:5]
+        return sorted(results, key=lambda x: x['score'], reverse=True)[:10]
 
     @classmethod
     def match_worker_to_jobs(cls, worker):
@@ -308,4 +308,4 @@ class MatchEngine:
                 })
             except Exception as e:
                 logger.error(f"Error matching worker {worker.id} to job {job.id}: {str(e)}")
-        return sorted(results, key=lambda x: x['score'], reverse=True)[:5]
+        return sorted(results, key=lambda x: x['score'], reverse=True)[:10]

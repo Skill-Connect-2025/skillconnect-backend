@@ -41,7 +41,7 @@ class JobWorkerRecommendationView(APIView):
 
         # Generate matches
         match_results = MatchEngine.match_job_to_workers(job)
-        for result in match_results[:5]:  # Top 5
+        for result in match_results[:10]:  # Top 10
             MatchResult.objects.create(
                 job=job,
                 worker=result['worker'],
@@ -75,7 +75,7 @@ class WorkerJobRecommendationView(APIView):
 
         # Generate matches
         match_results = MatchEngine.match_worker_to_jobs(worker)
-        for result in match_results[:5]:  # Top 5
+        for result in match_results[:10]:  # Top 10
             MatchResult.objects.create(
                 job=result['job'],
                 worker=worker,
