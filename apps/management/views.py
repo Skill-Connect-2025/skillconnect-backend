@@ -541,14 +541,23 @@ class RecommendedWorkersForJobView(APIView):
     """
     permission_classes = [IsAuthenticated, IsAdminUser]
     def get(self, request, job_id):
+        from apps.jobs.models import Job
+        from apps.users.serializers import UserSerializer
         try:
             job = Job.objects.get(id=job_id)
         except Job.DoesNotExist:
-            return Response({'error': 'Job not found'}, status=404)
-        # Use your recommendation engine to get recommended workers
-        recommended_workers = MatchEngine.recommend_workers_for_job(job)
-        serializer = UserSerializer([w.user for w in recommended_workers], many=True)
-        return Response(serializer.data)
+            return Response({"detail": "Job not found."}, status=404)
+        results = MatchEngine.match_job_to_workers(job)
+        # Serialize workers and include score/criteria
+        data = [
+            {
+                "worker": UserSerializer(r["worker"]).data,
+                "score": r["score"],
+                "criteria": r["criteria"]
+            }
+            for r in results
+        ]
+        return Response(data)
 
 class RecommendedJobsForWorkerView(APIView):
     """
@@ -557,11 +566,20 @@ class RecommendedJobsForWorkerView(APIView):
     """
     permission_classes = [IsAuthenticated, IsAdminUser]
     def get(self, request, worker_id):
+        from apps.users.models import Worker
+        from apps.jobs.serializers import JobSerializer
         try:
             worker = Worker.objects.get(id=worker_id)
         except Worker.DoesNotExist:
-            return Response({'error': 'Worker not found'}, status=404)
-        # Use your recommendation engine to get recommended jobs
-        recommended_jobs = MatchEngine.recommend_jobs_for_worker(worker)
-        serializer = JobSerializer(recommended_jobs, many=True)
-        return Response(serializer.data)
+            return Response({"detail": "Worker not found."}, status=404)
+        results = MatchEngine.match_worker_to_jobs(worker)
+        # Serialize jobs and include score/criteria
+        data = [
+            {
+                "job": JobSerializer(r["job"]).data,
+                "score": r["score"],
+                "criteria": r["criteria"]
+            }
+            for r in results
+        ]
+        return Response(data)
