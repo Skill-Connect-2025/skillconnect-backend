@@ -31,7 +31,7 @@ from apps.recommendations.signals import invalidate_worker_matches, invalidate_j
 from apps.recommendations.serializers import MatchResultSerializer
 from apps.jobs.models import Job
 from apps.jobs.serializers import JobSerializer
-from apps.users.serializers import UserSerializer, WorkerSerializer
+from apps.users.serializers import UserSerializer, WorkerProfileSerializer
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -480,7 +480,7 @@ class RecommendedWorkersForJobView(APIView):
         # Serialize workers and include score/criteria
         data = [
             {
-                "worker": WorkerSerializer(r["worker"]).data,
+                "worker": WorkerProfileSerializer(r["worker"]).data,
                 "score": r["score"],
                 "criteria": r["criteria"]
             }
