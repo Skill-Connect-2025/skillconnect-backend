@@ -15,6 +15,8 @@ class User(AbstractUser):
     flagged = models.BooleanField(default=False)
     flag_reason = models.TextField(blank=True, null=True)
     suspended_until = models.DateTimeField(blank=True, null=True)
+    is_premium = models.BooleanField(default=False)
+    premium_until = models.DateTimeField(null=True, blank=True)
 
     @property
     def is_client(self):
@@ -119,6 +121,8 @@ class Worker(models.Model):
         choices=[('cash', 'Cash'), ('chapa', 'Chapa')],
         default='cash'
     )
+    monthly_applications_count = models.PositiveIntegerField(default=0)
+    last_application_reset = models.DateField(default=timezone.now)
 
     @property
     def years_of_experience(self):

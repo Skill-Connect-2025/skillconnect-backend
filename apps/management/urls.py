@@ -10,6 +10,7 @@ router.register(r'analytics', views.SystemAnalyticsViewSet, basename='analytics'
 router.register(r'disputes', views.DisputeManagementViewSet, basename='disputes')
 router.register(r'categories', views.CategoryViewSet, basename='categories')
 router.register(r'jobs', views.JobViewSet, basename='jobs')
+router.register(r'premium-plans', views.PremiumPlanViewSet, basename='premium-plans')
 
 urlpatterns = [
     path('', include(router.urls)),

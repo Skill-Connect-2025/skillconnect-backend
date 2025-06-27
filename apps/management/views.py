@@ -24,7 +24,7 @@ from .serializers import NotificationLogSerializer, SystemAnalyticsSerializer, B
 from apps.recommendations.models import WeightConfig
 from apps.jobs.models import Category
 from apps.jobs.serializers import CategorySerializer
-from apps.management.models import ManagementLog
+from apps.management.models import ManagementLog, PremiumPlan
 from apps.recommendations.utils import MatchEngine
 from apps.recommendations.models import MatchResult
 from apps.recommendations.signals import invalidate_worker_matches, invalidate_job_matches
@@ -32,6 +32,7 @@ from apps.recommendations.serializers import MatchResultSerializer
 from apps.jobs.models import Job
 from apps.jobs.serializers import JobSerializer
 from apps.users.serializers import UserSerializer, WorkerProfileSerializer
+from apps.management.serializers import PremiumPlanSerializer
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -143,6 +144,22 @@ class ManagementUserViewSet(viewsets.ModelViewSet):
             details=f'Reset password for user {user.username}'
         )
         return Response({'status': 'password reset'})
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, IsAdminUser])
+    def grant_premium(self, request, pk=None):
+        """
+        Admin can grant premium to a user for a given plan.
+        """
+        user = self.get_object()
+        plan_id = request.data.get('plan_id')
+        try:
+            plan = PremiumPlan.objects.get(id=plan_id)
+        except PremiumPlan.DoesNotExist:
+            return Response({'detail': 'Plan not found.'}, status=404)
+        user.is_premium = True
+        user.premium_until = timezone.now() + timezone.timedelta(days=plan.duration_days)
+        user.save()
+        return Response({'detail': f'Granted {plan.name} premium to user.'})
 
 class SystemAnalyticsViewSet(viewsets.ReadOnlyModelViewSet):
     """
@@ -512,3 +529,11 @@ class RecommendedJobsForWorkerView(APIView):
             for r in results
         ]
         return Response(data)
+
+class PremiumPlanViewSet(viewsets.ModelViewSet):
+    """
+    Admin API for managing premium subscription plans.
+    """
+    queryset = PremiumPlan.objects.all()
+    serializer_class = PremiumPlanSerializer
+    permission_classes = [IsAuthenticated, IsAdminUser]

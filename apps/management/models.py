@@ -99,3 +99,11 @@ class NotificationTemplate(models.Model):
             return subject, body
         except KeyError as e:
             raise ValueError(f"Missing required variable: {e}")
+
+class PremiumPlan(models.Model):
+    name = models.CharField(max_length=50)
+    price = models.DecimalField(max_digits=8, decimal_places=2)
+    duration_days = models.PositiveIntegerField()
+
+    def __str__(self):
+        return self.name
