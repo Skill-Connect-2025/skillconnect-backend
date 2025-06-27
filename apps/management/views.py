@@ -31,7 +31,7 @@ from apps.recommendations.signals import invalidate_worker_matches, invalidate_j
 from apps.recommendations.serializers import MatchResultSerializer
 from apps.jobs.models import Job
 from apps.jobs.serializers import JobSerializer
-from apps.users.serializers import UserSerializer
+from apps.users.serializers import UserSerializer, WorkerSerializer
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -210,15 +210,6 @@ class SystemAnalyticsViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-class ManagementLogViewSet(viewsets.ReadOnlyModelViewSet):
-    """
-    Admin API for viewing management action logs (audit trail).
-    Only accessible to admin/superuser accounts.
-    """
-    queryset = ManagementLog.objects.all()
-    serializer_class = ManagementLogSerializer
-    permission_classes = [IsAuthenticated, IsAdminUser]
-
 class DisputeManagementViewSet(viewsets.ModelViewSet):
     """
     Admin API for managing disputes (CRUD, resolve, statistics).
@@ -387,69 +378,32 @@ class CategoryViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsAdminUser]
 
 class RecommendationManagementView(APIView):
-    permission_classes = [IsAuthenticated, IsSuperuser]
-
-    @swagger_auto_schema(
-        operation_description="Get recommendation system metrics and statistics",
-        responses={
-            200: openapi.Response(
-                description="Recommendation system metrics",
-                schema=openapi.Schema(
-                    type=openapi.TYPE_OBJECT,
-                    properties={
-                        'match_quality': openapi.Schema(
-                            type=openapi.TYPE_OBJECT,
-                            properties={
-                                'average_score': openapi.Schema(type=openapi.TYPE_NUMBER),
-                                'score_distribution': openapi.Schema(type=openapi.TYPE_OBJECT),
-                                'acceptance_rate': openapi.Schema(type=openapi.TYPE_NUMBER),
-                            }
-                        ),
-                        'algorithm_metrics': openapi.Schema(
-                            type=openapi.TYPE_OBJECT,
-                            properties={
-                                'skill_match_weight': openapi.Schema(type=openapi.TYPE_NUMBER),
-                                'experience_weight': openapi.Schema(type=openapi.TYPE_NUMBER),
-                                'rating_weight': openapi.Schema(type=openapi.TYPE_NUMBER),
-                                'location_weight': openapi.Schema(type=openapi.TYPE_NUMBER),
-                            }
-                        ),
-                        'performance_metrics': openapi.Schema(
-                            type=openapi.TYPE_OBJECT,
-                            properties={
-                                'average_response_time': openapi.Schema(type=openapi.TYPE_NUMBER),
-                                'cache_hit_rate': openapi.Schema(type=openapi.TYPE_NUMBER),
-                                'embedding_quality': openapi.Schema(type=openapi.TYPE_NUMBER),
-                            }
-                        ),
-                    }
-                )
-            ),
-            401: 'Unauthorized',
-            403: 'Forbidden'
-        }
-    )
+    """
+    Admin API to get recommendation system metrics and statistics.
+    Only accessible to admin/superuser accounts.
+    """
+    permission_classes = [IsAuthenticated, IsAdminUser]
     def get(self, request):
         # Get match quality metrics
         match_quality = {
-            'average_score': self._calculate_average_match_score(),
-            'score_distribution': self._get_score_distribution(),
-            'acceptance_rate': self._calculate_acceptance_rate(),
+            'average_score': 0,
+            'score_distribution': {},
+            'acceptance_rate': 0
         }
 
         # Get algorithm metrics
         algorithm_metrics = {
-            'skill_match_weight': MatchEngine.SKILL_WEIGHT,
-            'experience_weight': MatchEngine.EXPERIENCE_WEIGHT,
-            'rating_weight': MatchEngine.TARGET_JOB_WEIGHT,
-            'location_weight': MatchEngine.LOCATION_WEIGHT,
+            'skill_match_weight': MatchEngine.DEFAULT_SKILL_WEIGHT,
+            'experience_weight': MatchEngine.DEFAULT_EXPERIENCE_WEIGHT,
+            'rating_weight': MatchEngine.DEFAULT_RATING_WEIGHT,
+            'location_weight': MatchEngine.DEFAULT_LOCATION_WEIGHT
         }
 
         # Get performance metrics
         performance_metrics = {
-            'average_response_time': self._calculate_average_response_time(),
-            'cache_hit_rate': self._calculate_cache_hit_rate(),
-            'embedding_quality': self._calculate_embedding_quality(),
+            'average_response_time': 0,
+            'cache_hit_rate': 0,
+            'embedding_quality': 0
         }
 
         return Response({
@@ -487,10 +441,10 @@ class RecommendationManagementView(APIView):
             )
 
         # Update weights in the MatchEngine class
-        MatchEngine.SKILL_WEIGHT = weights.get('skill_match_weight', MatchEngine.SKILL_WEIGHT)
-        MatchEngine.EXPERIENCE_WEIGHT = weights.get('experience_weight', MatchEngine.EXPERIENCE_WEIGHT)
-        MatchEngine.TARGET_JOB_WEIGHT = weights.get('rating_weight', MatchEngine.TARGET_JOB_WEIGHT)
-        MatchEngine.LOCATION_WEIGHT = weights.get('location_weight', MatchEngine.LOCATION_WEIGHT)
+        MatchEngine.DEFAULT_SKILL_WEIGHT = weights.get('skill_match_weight', MatchEngine.DEFAULT_SKILL_WEIGHT)
+        MatchEngine.DEFAULT_EXPERIENCE_WEIGHT = weights.get('experience_weight', MatchEngine.DEFAULT_EXPERIENCE_WEIGHT)
+        MatchEngine.DEFAULT_RATING_WEIGHT = weights.get('rating_weight', MatchEngine.DEFAULT_RATING_WEIGHT)
+        MatchEngine.DEFAULT_LOCATION_WEIGHT = weights.get('location_weight', MatchEngine.DEFAULT_LOCATION_WEIGHT)
 
         # Log the weight update
         ManagementLog.objects.create(
@@ -500,30 +454,6 @@ class RecommendationManagementView(APIView):
         )
 
         return Response({"message": "Recommendation weights updated successfully"})
-
-    def _calculate_average_match_score(self):
-        # Implementation for calculating average match score
-        pass
-
-    def _get_score_distribution(self):
-        # Implementation for getting score distribution
-        pass
-
-    def _calculate_acceptance_rate(self):
-        # Implementation for calculating acceptance rate
-        pass
-
-    def _calculate_average_response_time(self):
-        # Implementation for calculating average response time
-        pass
-
-    def _calculate_cache_hit_rate(self):
-        # Implementation for calculating cache hit rate
-        pass
-
-    def _calculate_embedding_quality(self):
-        # Implementation for calculating embedding quality
-        pass
 
 class JobViewSet(viewsets.ModelViewSet):
     """
@@ -542,7 +472,6 @@ class RecommendedWorkersForJobView(APIView):
     permission_classes = [IsAuthenticated, IsAdminUser]
     def get(self, request, job_id):
         from apps.jobs.models import Job
-        from apps.users.serializers import UserSerializer
         try:
             job = Job.objects.get(id=job_id)
         except Job.DoesNotExist:
@@ -551,7 +480,7 @@ class RecommendedWorkersForJobView(APIView):
         # Serialize workers and include score/criteria
         data = [
             {
-                "worker": UserSerializer(r["worker"]).data,
+                "worker": WorkerSerializer(r["worker"]).data,
                 "score": r["score"],
                 "criteria": r["criteria"]
             }

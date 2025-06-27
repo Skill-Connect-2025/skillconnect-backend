@@ -8,7 +8,6 @@ router = DefaultRouter()
 router.register(r'users', views.ManagementUserViewSet)
 router.register(r'analytics', views.SystemAnalyticsViewSet, basename='analytics')
 router.register(r'disputes', views.DisputeManagementViewSet, basename='disputes')
-router.register(r'management-logs', views.ManagementLogViewSet)
 router.register(r'categories', views.CategoryViewSet, basename='categories')
 router.register(r'jobs', views.JobViewSet, basename='jobs')
 
