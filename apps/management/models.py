@@ -80,8 +80,8 @@ class NotificationTemplate(models.Model):
     name = models.CharField(max_length=100)
     subject = models.CharField(max_length=200)
     body = models.TextField()
-    type = models.CharField(max_length=50)  # e.g., 'job_assigned', 'payment_received'
-    variables = models.JSONField(default=list)  # List of required variables
+    type = models.CharField(max_length=50)  
+    variables = models.JSONField(default=list)  
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
