@@ -843,7 +843,7 @@ class ClientSentRequestsView(APIView):
         }
     )
     def get(self, request):
-        requests = JobRequest.objects.filter(application__job__client=request.user)
+        requests = JobRequest.objects.filter(job__client=request.user)
         serializer = JobRequestSerializer(requests, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
