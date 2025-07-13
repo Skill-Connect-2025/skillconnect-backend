@@ -827,7 +827,15 @@ class WorkerJobRequestsView(APIView):
         }
     )
     def get(self, request):
-        requests = JobRequest.objects.filter(application__worker=request.user.worker)
+        # Debug: Check if user is authenticated
+        if not request.user.is_authenticated:
+            return Response({"error": "User not authenticated"}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        # Debug: Check if user has worker profile
+        if not hasattr(request.user, 'worker'):
+            return Response({"error": "User does not have worker profile"}, status=status.HTTP_403_FORBIDDEN)
+        
+        requests = JobRequest.objects.filter(worker=request.user.worker)
         serializer = JobRequestSerializer(requests, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
