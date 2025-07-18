@@ -10,7 +10,7 @@ import logging
 from django.views.decorators.csrf import csrf_exempt
 from django.db.models.signals import post_save
 from django.dispatch import receiver
-from django.db.models import Avg
+from django.db.models import Avg, Count
 from apps.users.models import User
 
 logger = logging.getLogger('django')
@@ -38,8 +38,11 @@ class WorkerProfileSerializer(serializers.ModelSerializer):
         ref_name = 'JobsWorkerProfile'
 
     def get_user(self, obj):
-        # Include sensitive info only when appropriate (e.g., after acceptance)
-        user = obj.user
+        # Defensive: Return None if related user does not exist
+        try:
+            user = obj.user
+        except Exception:
+            return None
         return {
             'id': user.id,
             'first_name': user.first_name,
@@ -57,8 +60,11 @@ class PublicWorkerProfileSerializer(serializers.ModelSerializer):
         fields = ['id', 'user', 'skills', 'location', 'profile_pic', 'rating_stats']
 
     def get_user(self, obj):
-        # Only include first_name and last_name, exclude email/phone
-        user = obj.user
+        # Defensive: Return None if related user does not exist
+        try:
+            user = obj.user
+        except Exception:
+            return None
         return {
             'id': user.id,
             'first_name': user.first_name,
@@ -339,6 +345,18 @@ class DisputeSerializer(serializers.ModelSerializer):
             'id', 'reported_by', 'reported_user', 'status', 'resolution',
             'resolved_by', 'created_at', 'updated_at', 'resolved_at'
         ]
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        # Defensive: If related user is missing, return None instead of raising error
+        from django.core.exceptions import ObjectDoesNotExist
+        for field in ['reported_by', 'reported_user', 'resolved_by']:
+            try:
+                # Access the related user to trigger DoesNotExist if missing
+                getattr(instance, field)
+            except ObjectDoesNotExist:
+                rep[field] = None
+        return rep
 
     def validate(self, data):
         job = self.context['job']
