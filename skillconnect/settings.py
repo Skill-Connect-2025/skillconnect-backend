@@ -11,7 +11,9 @@ Env.read_env(os.path.join(BASE_DIR, '.env'))
 SECRET_KEY = env('SECRET_KEY', default='django-insecure-$nym9i&u#%n=zi#7uz+5r28o62gek*x$#ox2njxf2))wtfo8n7')
 DEBUG = env.bool('DEBUG', default=True)
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'api.skillconnect.wisewaytech.com']
+ALLOWED_HOSTS = ['*']
+
+
 
 
 INSTALLED_APPS = [
@@ -34,6 +36,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
