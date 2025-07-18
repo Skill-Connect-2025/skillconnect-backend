@@ -491,6 +491,14 @@ class UserSerializer(serializers.ModelSerializer):
     def get_rating_stats(self, obj):
         return obj.get_rating_stats()
 
+    def to_representation(self, instance):
+        from django.core.exceptions import ObjectDoesNotExist
+        try:
+            return super().to_representation(instance)
+        except ObjectDoesNotExist:
+            # If the user or a related object is missing, return None
+            return None
+
 class ClientProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = Client
