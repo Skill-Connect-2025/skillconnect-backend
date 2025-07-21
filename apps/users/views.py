@@ -22,12 +22,17 @@ from django.conf import settings
 import random
 import logging
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.db.models import Q
 from apps.management.models import PremiumPlan
 
 User = get_user_model()
 logger = logging.getLogger('django')
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def hello_world(request):
+    return Response({'message': 'Hello, world!'})
 
 class AuthLoginView(APIView):
     permission_classes = []

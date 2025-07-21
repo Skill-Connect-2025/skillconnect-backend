@@ -6,10 +6,13 @@ from .views import (
     UserProfileView, UserProfileClientView, UserProfileWorkerView, 
     UserRatingStatsView, UserReviewsView, RecentReviewsView, PaymentPreferenceView,
     WorkersByPaymentMethodView, JobsByPaymentMethodView, LogoutView,
-    purchase_premium, chapa_webhook
+    purchase_premium, chapa_webhook,
+    hello_world
 )
 
 urlpatterns = [
+    # Hello World (no authentication required)
+    path('hello-world/', hello_world, name='hello_world'),
     # Authentication
     path('auth/login/', AuthLoginView.as_view(), name='auth_login'),
     path('auth/signup/initiate/', AuthSignupInitiateView.as_view(), name='auth_signup_initiate'),
