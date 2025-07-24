@@ -27,10 +27,15 @@ class JobWorkerRecommendationView(APIView):
         }
     )
     def get(self, request, job_id):
+        logger.debug(f"request.user: {request.user}, id: {getattr(request.user, 'id', None)}, is_authenticated: {getattr(request.user, 'is_authenticated', False)}, is_active: {getattr(request.user, 'is_active', False)}")
+        if not request.user or not getattr(request.user, 'is_authenticated', False):
+            return Response({"error": "Authentication credentials were not provided or user does not exist."}, status=status.HTTP_401_UNAUTHORIZED)
+        if not getattr(request.user, 'is_active', True):
+            return Response({"error": "User account is inactive."}, status=status.HTTP_403_FORBIDDEN)
         try:
             job = Job.objects.get(id=job_id, client=request.user)
         except Job.DoesNotExist:
-            logger.error(f"Job {job_id} not found or not authorized for user {request.user.id}")
+            logger.error(f"Job {job_id} not found or not authorized for user {getattr(request.user, 'id', None)}")
             return Response({"error": "Job not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
 
         # Check cached results
