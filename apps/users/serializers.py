@@ -544,7 +544,10 @@ class WorkerProfileSerializer(serializers.Serializer):
         return FeedbackSerializer(obj.feedback.all(), many=True).data
 
     def get_rating_stats(self, obj):
-        return obj.user.get_rating_stats()
+        try:
+            return obj.user.get_rating_stats()
+        except Exception:
+            return {}
 
     def validate(self, data):
         try:
@@ -608,13 +611,21 @@ class WorkerProfileSerializer(serializers.Serializer):
         return instance
 
     def to_representation(self, instance):
+        try:
+            email = instance.user.email
+        except Exception:
+            email = None
+        try:
+            phone_number = instance.user.phone_number
+        except Exception:
+            phone_number = None
         return {
             'birthdate': instance.birthdate.isoformat() if instance.birthdate else None,
             'location': instance.location,
             'nationality': instance.nationality,
             'gender': instance.gender,
-            'email': instance.user.email,
-            'phone_number': instance.user.phone_number,
+            'email': email,
+            'phone_number': phone_number,
             'has_experience': instance.has_experience,
             'years_of_experience': instance.years_of_experience, 
             'educations': EducationSerializer(instance.educations.all(), many=True).data,
