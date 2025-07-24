@@ -33,10 +33,13 @@ class JobWorkerRecommendationView(APIView):
         if not getattr(request.user, 'is_active', True):
             return Response({"error": "User account is inactive."}, status=status.HTTP_403_FORBIDDEN)
         try:
-            job = Job.objects.get(id=job_id, client=request.user)
+            job = Job.objects.get(id=job_id)
         except Job.DoesNotExist:
-            logger.error(f"Job {job_id} not found or not authorized for user {getattr(request.user, 'id', None)}")
-            return Response({"error": "Job not found or not authorized"}, status=status.HTTP_404_NOT_FOUND)
+            logger.error(f"Job {job_id} not found.")
+            return Response({"error": "Job not found"}, status=status.HTTP_404_NOT_FOUND)
+        if job.client != request.user:
+            logger.error(f"User {getattr(request.user, 'id', None)} not authorized to access job {job_id}.")
+            return Response({"error": "Not authorized to view this job"}, status=status.HTTP_403_FORBIDDEN)
 
         # Check cached results
         existing_matches = MatchResult.objects.filter(job=job).order_by('-score')
