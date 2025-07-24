@@ -183,7 +183,9 @@ class MatchEngine:
         workers = Worker.objects.filter(
             Q(location__iexact=job_loc) |
             Q(skills__name__in=extended_skills)
-        ).distinct()
+        ).distinct().select_related('user')
+        # Filter out orphaned workers (no related user)
+        workers = [w for w in workers if hasattr(w, 'user') and w.user is not None]
         
         # Store job embedding
         job_text = f"{job.title} {job.skills} {job.description} {job.category.name}"
